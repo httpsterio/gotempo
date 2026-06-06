@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libayatana-appindicator3-dev
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build -ldflags "-w -s" -o gotempo .
+
+      - name: Package tarball
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          DIST="gotempo-${TAG}-linux-amd64"
+          mkdir -p "$DIST/assets"
+          cp gotempo install.sh uninstall.sh "$DIST/"
+          cp assets/logo.png "$DIST/assets/"
+          chmod +x "$DIST/install.sh" "$DIST/uninstall.sh"
+          tar -czf "${DIST}.tar.gz" "$DIST"
+          echo "ASSET=${DIST}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}

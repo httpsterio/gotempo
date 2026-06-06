@@ -1,6 +1,6 @@
 module gotempo
 
-go 1.26.3
+go 1.24
 
 require (
 	fyne.io/systray v1.12.1

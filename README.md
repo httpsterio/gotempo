@@ -22,15 +22,18 @@ Works with any BLE heart-rate monitor that uses the standard GATT HR profile (0x
 
 ## Install
 
-Download the latest binary and put it somewhere on your PATH:
+Download the latest release tarball, extract it, and run the installer:
 
 ```sh
-curl -L https://github.com/httpsterio/gotempo/releases/latest/download/gotempo \
-  -o ~/.local/bin/gotempo
-chmod +x ~/.local/bin/gotempo
+curl -LO https://github.com/httpsterio/gotempo/releases/latest/download/gotempo-VERSION-linux-amd64.tar.gz
+tar -xzf gotempo-VERSION-linux-amd64.tar.gz
+cd gotempo-VERSION-linux-amd64
+./install.sh
 ```
 
-Put the binary somewhere permanent before first launch. `config.json` and the `logs/` directory are created next to the binary, so if you move it later you will lose your saved device.
+Replace `VERSION` with the release tag (e.g. `v1.0.0`). `install.sh` copies the binary to `~/.local/bin/gotempo`, installs the icon and an app-menu entry, and refreshes the desktop caches — no sudo required. Make sure `~/.local/bin` is on your PATH. Run `./uninstall.sh` to remove everything.
+
+`config.json` and the `logs/` directory are created next to the binary (`~/.local/bin`).
 
 ---
 
@@ -50,19 +53,15 @@ cd gotempo
 go build -o gotempo .
 ```
 
-Requires Go 1.24+. The PNG icons are embedded in the binary at build time — no assets need to ship alongside it. BlueZ is a runtime dependency and cannot be bundled.
+Requires Go 1.24+. The tray status icons are embedded in the binary at build time. BlueZ is a runtime dependency and cannot be bundled.
 
-### Desktop integration (optional)
-
-To install the binary plus an application menu entry and icon under `~/.local` (no sudo):
+For desktop integration from a source build (app-menu entry + icon under `~/.local`, no sudo):
 
 ```sh
-make install
+make install     # make uninstall to remove
 ```
 
-This places `gotempo` in `~/.local/bin`, an icon under `~/.local/share/icons`, and `gotempo.desktop` in `~/.local/share/applications`, so gotempo appears in your app menu. Use `make uninstall` to remove them. Override the location with `PREFIX`, e.g. `sudo make install PREFIX=/usr/local`.
-
-> Note: Linux binaries can't carry an embedded icon the way Windows `.exe` files do — the icon comes from the installed `.desktop` entry, which uses `assets/logo.png`.
+Override the location with `PREFIX`, e.g. `sudo make install PREFIX=/usr/local`.
 
 ---
 
