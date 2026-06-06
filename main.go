@@ -61,6 +61,57 @@ func appDir() string {
 func configPath() string { return filepath.Join(appDir(), "config.json") }
 func outputPath() string { return filepath.Join(appDir(), "polar-h10.txt") }
 
+func autostartPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "autostart", "polar-hr.desktop")
+}
+
+func autostartEnabled() bool {
+	p := autostartPath()
+	if p == "" {
+		return false
+	}
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func enableAutostart() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	p := autostartPath()
+	if p == "" {
+		return fmt.Errorf("no home directory")
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return err
+	}
+	body := "[Desktop Entry]\n" +
+		"Type=Application\n" +
+		"Name=polar-hr\n" +
+		"Exec=" + exe + "\n" +
+		"Hidden=false\n" +
+		"NoDisplay=false\n" +
+		"X-GNOME-Autostart-enabled=true\n"
+	return os.WriteFile(p, []byte(body), 0644)
+}
+
+func disableAutostart() error {
+	p := autostartPath()
+	if p == "" {
+		return nil
+	}
+	err := os.Remove(p)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // ── notifications ────────────────────────────────────────────────────────────
 
 func notify(msg string) {
@@ -421,11 +472,12 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 // ── tray ─────────────────────────────────────────────────────────────────────
 
 type tray struct {
-	app       *App
-	mRetry    *systray.MenuItem
-	mStartLog *systray.MenuItem
-	mStopLog  *systray.MenuItem
-	mQuit     *systray.MenuItem
+	app        *App
+	mRetry     *systray.MenuItem
+	mStartLog  *systray.MenuItem
+	mStopLog   *systray.MenuItem
+	mAutostart *systray.MenuItem
+	mQuit      *systray.MenuItem
 }
 
 func (t *tray) refresh() {
@@ -472,6 +524,20 @@ func (t *tray) loop() {
 		case <-t.mStopLog.ClickedCh:
 			t.app.state.setLogging(false)
 			t.refresh()
+		case <-t.mAutostart.ClickedCh:
+			if t.mAutostart.Checked() {
+				if err := disableAutostart(); err != nil {
+					fmt.Printf("[autostart] disable failed: %v\n", err)
+				} else {
+					t.mAutostart.Uncheck()
+				}
+			} else {
+				if err := enableAutostart(); err != nil {
+					fmt.Printf("[autostart] enable failed: %v\n", err)
+				} else {
+					t.mAutostart.Check()
+				}
+			}
 		case <-t.mQuit.ClickedCh:
 			close(t.app.stop)
 			systray.Quit()
@@ -503,11 +569,12 @@ func main() {
 		systray.SetTooltip("polar-hr")
 
 		t := &tray{
-			app:       app,
-			mRetry:    systray.AddMenuItem("Retry", ""),
-			mStartLog: systray.AddMenuItem("Start logging", ""),
-			mStopLog:  systray.AddMenuItem("Stop logging", ""),
-			mQuit:     systray.AddMenuItem("Quit", ""),
+			app:        app,
+			mRetry:     systray.AddMenuItem("Retry", ""),
+			mStartLog:  systray.AddMenuItem("Start logging", ""),
+			mStopLog:   systray.AddMenuItem("Stop logging", ""),
+			mAutostart: systray.AddMenuItemCheckbox("Start on boot", "", autostartEnabled()),
+			mQuit:      systray.AddMenuItem("Quit", ""),
 		}
 		t.mRetry.Hide()
 		t.mStartLog.Hide()
