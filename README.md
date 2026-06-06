@@ -62,7 +62,7 @@ make install
 
 This places `gotempo` in `~/.local/bin`, an icon under `~/.local/share/icons`, and `gotempo.desktop` in `~/.local/share/applications`, so gotempo appears in your app menu. Use `make uninstall` to remove them. Override the location with `PREFIX`, e.g. `sudo make install PREFIX=/usr/local`.
 
-> Note: Linux binaries can't carry an embedded icon the way Windows `.exe` files do — the icon comes from the installed `.desktop` entry. The current icon is a placeholder; replace `assets/connected.png` (or point `ICON_SRC` in the Makefile at a real logo) before installing.
+> Note: Linux binaries can't carry an embedded icon the way Windows `.exe` files do — the icon comes from the installed `.desktop` entry, which uses `assets/logo.png`.
 
 ---
 
@@ -108,7 +108,7 @@ All paths are relative to the binary:
 
 - `config.json` — saved device, known-device history, and preferences. Managed by the app; see [Configuration](#configuration) if you need to edit it by hand.
 - `logs/gotempo-bpm.txt` — current BPM as a raw integer, overwritten on every change. Empty or absent when logging is not active.
-- `assets/` — icon PNGs (`connected.png`, `disconnected.png`, `running.png`). Embedded in the binary at build time.
+- `assets/` — tray status icons (`connected.png`, `disconnected.png`, `running.png`), embedded in the binary at build time, plus `logo.png` (512×512) used as the application icon by `make install`.
 
 ---
 
