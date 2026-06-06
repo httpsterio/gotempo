@@ -230,7 +230,6 @@ class BLEWorker:
                     bpm = int.from_bytes(data[1:3], "little")
                 else:
                     bpm = data[1]
-                print(f"[BPM] {bpm}")
                 self._handle_bpm(bpm)
 
             await client.start_notify(HR_CHAR_UUID, hr_handler)
@@ -256,17 +255,15 @@ class BLEWorker:
         raise ConnectionError("session_dropped")  # had a real session, then lost it
 
     def _handle_bpm(self, bpm: int):
-        logging = self.state.get("logging")
-        print(f"[BPM] handle bpm={bpm} logging={logging}")
-        if logging:
-            last = self.state.get("last_bpm")
-            if bpm != last:
-                self.state.set(last_bpm=bpm)
-                try:
-                    OUTPUT_FILE.write_text(str(bpm))
-                    print(f"[BPM] wrote {bpm}")
-                except Exception as e:
-                    print(f"[BPM] could not write output: {e}")
+        if not self.state.get("logging"):
+            return
+        last = self.state.get("last_bpm")
+        if bpm != last:
+            self.state.set(last_bpm=bpm)
+            try:
+                OUTPUT_FILE.write_text(str(bpm))
+            except Exception as e:
+                print(f"[BPM] could not write output: {e}")
 
 # ── fast-retry wrapper for mid-session drops ──────────────────────────────────
 
