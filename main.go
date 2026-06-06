@@ -779,6 +779,7 @@ type tray struct {
 	switchSlots []*systray.MenuItem
 	slotMACs    []string
 	slotNames   []string
+	mEmpty      *systray.MenuItem
 	mScanning   *systray.MenuItem
 	mRescan     *systray.MenuItem
 
@@ -905,6 +906,12 @@ func (t *tray) renderSwitch() {
 			s.Hide()
 		}
 	}
+	// Show a placeholder when there's nothing to list and no scan in flight.
+	if len(entries) == 0 && !t.scanning {
+		t.mEmpty.Show()
+	} else {
+		t.mEmpty.Hide()
+	}
 }
 
 func (t *tray) startScan() {
@@ -913,13 +920,19 @@ func (t *tray) startScan() {
 	}
 	t.scanning = true
 	t.mScanning.Show()
-	t.mRescan.Disable()
+	t.renderSwitch() // hide the "no devices" placeholder while scanning
 	go func() {
 		t.scanDone <- t.app.scanDevices(switchScanDuration)
 	}()
 }
 
-func (t *tray) loop() {
+// loop owns all tray UI mutation. autoScan kicks off a scan immediately, used
+// on startup when no device is configured yet.
+func (t *tray) loop(autoScan bool) {
+	t.refresh()
+	if autoScan {
+		t.startScan()
+	}
 	for {
 		select {
 		case <-t.app.uiUpdates:
@@ -973,7 +986,6 @@ func (t *tray) loop() {
 		case res := <-t.scanDone:
 			t.scanning = false
 			t.mScanning.Hide()
-			t.mRescan.Enable()
 			t.lastScanned = res
 			t.renderSwitch()
 		case <-t.mQuit.ClickedCh:
@@ -1043,6 +1055,9 @@ func main() {
 				}
 			}()
 		}
+		t.mEmpty = t.mSwitch.AddSubMenuItem("No devices found", "")
+		t.mEmpty.Disable()
+		t.mEmpty.Hide()
 		t.mScanning = t.mSwitch.AddSubMenuItem("Scanning…", "")
 		t.mScanning.Disable()
 		t.mScanning.Hide()
@@ -1053,16 +1068,10 @@ func main() {
 		t.mQuit = systray.AddMenuItem("Quit", "")
 
 		t.mRetry.Hide()
-		t.refresh()
 
-		go t.loop()
+		// loop owns all UI mutation; auto-scan on startup if no device is set.
+		go t.loop(app.currentMAC() == "")
 		go app.runBLE()
-
-		// With no device configured, scan straight away so the user can pick
-		// one from the Switch device submenu.
-		if app.currentMAC() == "" {
-			t.startScan()
-		}
 	}, func() {
 		// onExit
 	})
