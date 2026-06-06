@@ -4,10 +4,12 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -118,6 +120,37 @@ func notify(msg string) {
 	_ = exec.Command("notify-send", "polar-hr", msg).Run()
 }
 
+// describeConnectErr maps a raw BLE/BlueZ error into a short, human-readable
+// reason. The raw error is returned verbatim if no specific case matches.
+func describeConnectErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "le-connection-abort-by-local"):
+		return "device unreachable — sensor asleep, out of range, or electrodes dry"
+	case strings.Contains(msg, "br-connection-page-timeout"),
+		strings.Contains(msg, "Connection refused"):
+		return "device did not respond"
+	case strings.Contains(msg, "Software caused connection abort"):
+		return "connection aborted by adapter"
+	case strings.Contains(msg, "Operation already in progress"):
+		return "another connection attempt is still in flight"
+	case strings.Contains(msg, "not available"),
+		strings.Contains(msg, "does not exist"):
+		return "device not known to BlueZ — try `bluetoothctl scan on` once"
+	case strings.Contains(msg, "could not find some services"):
+		return "device does not expose the heart-rate service"
+	case strings.Contains(msg, "could not find some characteristics"):
+		return "device does not expose the heart-rate characteristic"
+	case strings.Contains(msg, "timeout on DiscoverServices"):
+		return "service discovery timed out"
+	default:
+		return msg
+	}
+}
+
 // ── config ───────────────────────────────────────────────────────────────────
 
 type Config struct {
@@ -170,12 +203,12 @@ func scanAndSelect(adapter *bluetooth.Adapter) Config {
 		seen[addr] = found{addr, r.LocalName()}
 	})
 	if err != nil {
-		fmt.Println("scan error:", err)
+		log.Println("scan error:", err)
 		os.Exit(1)
 	}
 
 	if len(seen) == 0 {
-		fmt.Println("No heart-rate devices found. Make sure the H10 is awake and dual-BLE is enabled.")
+		log.Println("no heart-rate devices found — make sure the H10 is awake and dual-BLE is enabled")
 		os.Exit(1)
 	}
 
@@ -202,9 +235,9 @@ func scanAndSelect(adapter *bluetooth.Adapter) Config {
 	sel := list[choice-1]
 	c := Config{MAC: sel.addr, Name: sel.name}
 	if err := saveConfig(c); err != nil {
-		fmt.Println("save config error:", err)
+		log.Println("save config error:", err)
 	}
-	fmt.Printf("Saved: %s (%s)\n", sel.name, sel.addr)
+	log.Printf("saved: %s (%s)", sel.name, sel.addr)
 	return c
 }
 
@@ -302,7 +335,7 @@ func (a *App) handleBPM(bpm int) {
 	a.state.mu.Unlock()
 
 	if err := os.WriteFile(outputPath(), []byte(strconv.Itoa(bpm)), 0644); err != nil {
-		fmt.Printf("[BPM] could not write output: %v\n", err)
+		log.Printf("[BPM] could not write output: %v", err)
 	}
 }
 
@@ -321,7 +354,7 @@ func makeSchedule() []time.Duration {
 func (a *App) runBLE() {
 	parsed, err := bluetooth.ParseMAC(a.mac)
 	if err != nil {
-		fmt.Println("invalid mac:", err)
+		log.Println("invalid mac:", err)
 		return
 	}
 	addr := bluetooth.Address{MACAddress: bluetooth.MACAddress{MAC: parsed}}
@@ -342,7 +375,11 @@ func (a *App) runBLE() {
 		}
 
 		hadSession := err.Error() == "session_dropped"
-		fmt.Printf("[BLE] dropped: %v\n", err)
+		if hadSession {
+			log.Println("[BLE] session ended; attempting fast reconnect")
+		} else {
+			log.Printf("[BLE] connect failed: %s", describeConnectErr(err))
+		}
 		a.state.setConnected(false)
 		a.signalUI()
 
@@ -397,7 +434,7 @@ func (a *App) runBLE() {
 // session was established and then lost, or another error if the attempt
 // failed before subscription succeeded.
 func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
-	fmt.Printf("[BLE] connecting to %s…\n", addr.MAC.String())
+	log.Printf("[BLE] connecting to %s…", addr.MAC.String())
 	device, err := a.adapter.Connect(addr, bluetooth.ConnectionParams{})
 	if err != nil {
 		return err
@@ -443,7 +480,7 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 		return err
 	}
 
-	fmt.Println("[BLE] connected")
+	log.Println("[BLE] connected")
 	a.state.onConnect()
 	if wasNotified {
 		notify("reconnected")
@@ -527,13 +564,13 @@ func (t *tray) loop() {
 		case <-t.mAutostart.ClickedCh:
 			if t.mAutostart.Checked() {
 				if err := disableAutostart(); err != nil {
-					fmt.Printf("[autostart] disable failed: %v\n", err)
+					log.Printf("[autostart] disable failed: %v", err)
 				} else {
 					t.mAutostart.Uncheck()
 				}
 			} else {
 				if err := enableAutostart(); err != nil {
-					fmt.Printf("[autostart] enable failed: %v\n", err)
+					log.Printf("[autostart] enable failed: %v", err)
 				} else {
 					t.mAutostart.Check()
 				}
@@ -551,7 +588,7 @@ func (t *tray) loop() {
 func main() {
 	adapter := bluetooth.DefaultAdapter
 	if err := adapter.Enable(); err != nil {
-		fmt.Println("failed to enable adapter:", err)
+		log.Println("failed to enable adapter:", err)
 		os.Exit(1)
 	}
 
@@ -560,7 +597,7 @@ func main() {
 		c := scanAndSelect(adapter)
 		cfg = &c
 	}
-	fmt.Printf("Using device: %s (%s)\n", cfg.Name, cfg.MAC)
+	log.Printf("using device: %s (%s)", cfg.Name, cfg.MAC)
 
 	app := newApp(cfg.MAC, adapter)
 
