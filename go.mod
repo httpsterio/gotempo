@@ -1,4 +1,4 @@
-module polar-hr
+module gotempo
 
 go 1.26.3
 

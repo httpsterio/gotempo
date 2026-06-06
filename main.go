@@ -61,14 +61,15 @@ func appDir() string {
 }
 
 func configPath() string { return filepath.Join(appDir(), "config.json") }
-func outputPath() string { return filepath.Join(appDir(), "polar-h10.txt") }
+func logsDir() string    { return filepath.Join(appDir(), "logs") }
+func outputPath() string { return filepath.Join(logsDir(), "gotempo-bpm.txt") }
 
 func autostartPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "autostart", "polar-hr.desktop")
+	return filepath.Join(home, ".config", "autostart", "gotempo.desktop")
 }
 
 func autostartEnabled() bool {
@@ -94,7 +95,7 @@ func enableAutostart() error {
 	}
 	body := "[Desktop Entry]\n" +
 		"Type=Application\n" +
-		"Name=polar-hr\n" +
+		"Name=Gotempo\n" +
 		"Exec=" + exe + "\n" +
 		"Hidden=false\n" +
 		"NoDisplay=false\n" +
@@ -117,7 +118,7 @@ func disableAutostart() error {
 // ── notifications ────────────────────────────────────────────────────────────
 
 func notify(msg string) {
-	_ = exec.Command("notify-send", "polar-hr", msg).Run()
+	_ = exec.Command("notify-send", "gotempo", msg).Run()
 }
 
 // describeConnectErr maps a raw BLE/BlueZ error into a short, human-readable
@@ -182,7 +183,7 @@ func saveConfig(c Config) error {
 }
 
 func scanAndSelect(adapter *bluetooth.Adapter) Config {
-	fmt.Println("Scanning for Polar H10 (15 s)…")
+	fmt.Println("Scanning for heart-rate monitors (15 s)…")
 
 	type found struct{ addr, name string }
 	seen := map[string]found{}
@@ -586,6 +587,10 @@ func (t *tray) loop() {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 func main() {
+	if err := os.MkdirAll(logsDir(), 0755); err != nil {
+		log.Println("could not create logs directory:", err)
+	}
+
 	adapter := bluetooth.DefaultAdapter
 	if err := adapter.Enable(); err != nil {
 		log.Println("failed to enable adapter:", err)
@@ -603,7 +608,7 @@ func main() {
 
 	systray.Run(func() {
 		systray.SetIcon(imgDisconnected)
-		systray.SetTooltip("polar-hr")
+		systray.SetTooltip("gotempo")
 
 		t := &tray{
 			app:        app,
