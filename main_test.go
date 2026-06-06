@@ -2,43 +2,55 @@ package main
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
-func TestLoadConfigMigratesLegacy(t *testing.T) {
-	dir := t.TempDir()
-	// configPath() resolves relative to the executable dir; override via chdir
-	// is not possible, so we write/read directly through the same JSON path.
+func TestParseConfigMigratesLegacy(t *testing.T) {
 	legacy := `{"mac":"24:AC:AC:18:41:CC","name":"Polar H10 1841CC31"}`
-	p := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(p, []byte(legacy), 0644); err != nil {
-		t.Fatal(err)
+	cfg := parseConfig([]byte(legacy))
+	if cfg == nil {
+		t.Fatal("parseConfig returned nil for legacy config")
 	}
-
-	data, _ := os.ReadFile(p)
-	var raw struct {
-		Current string        `json:"current"`
-		Known   []KnownDevice `json:"known"`
-		MAC     string        `json:"mac"`
-		Name    string        `json:"name"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &Config{Current: raw.Current, Known: raw.Known}
-	if cfg.Current == "" && raw.MAC != "" {
-		cfg.Current = raw.MAC
-		cfg.upsert(raw.MAC, raw.Name)
-	}
-
 	if cfg.Current != "24:AC:AC:18:41:CC" {
 		t.Errorf("current = %q, want the legacy mac", cfg.Current)
 	}
 	if len(cfg.Known) != 1 || cfg.Known[0].Name != "Polar H10 1841CC31" {
 		t.Errorf("known = %+v, want one migrated device", cfg.Known)
+	}
+}
+
+func TestConfigAutoLogRoundTrip(t *testing.T) {
+	orig := Config{
+		Current: "24:AC:AC:18:41:CC",
+		Known:   []KnownDevice{{MAC: "24:AC:AC:18:41:CC", Name: "H10"}},
+		AutoLog: true,
+	}
+	// Save path goes through clone(), so exercise it here — a clone that drops
+	// AutoLog would lose the preference on every write.
+	data, err := json.MarshalIndent(orig.clone(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := parseConfig(data)
+	if got == nil {
+		t.Fatal("parseConfig returned nil")
+	}
+	if !got.AutoLog {
+		t.Errorf("AutoLog did not survive clone+round-trip: %s", data)
+	}
+}
+
+func TestParseConfigKeepsDevicelessAutoLog(t *testing.T) {
+	// A config with no current device but auto_log set must be preserved,
+	// otherwise the preference is lost before a device is ever picked.
+	data := `{"current":"","known":null,"auto_log":true}`
+	got := parseConfig([]byte(data))
+	if got == nil {
+		t.Fatal("parseConfig discarded a device-less config")
+	}
+	if !got.AutoLog {
+		t.Error("AutoLog lost for device-less config")
 	}
 }
 

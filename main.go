@@ -178,7 +178,7 @@ type Config struct {
 }
 
 func (c Config) clone() Config {
-	out := Config{Current: c.Current}
+	out := Config{Current: c.Current, AutoLog: c.AutoLog}
 	out.Known = append([]KnownDevice(nil), c.Known...)
 	return out
 }
@@ -219,30 +219,36 @@ func (c Config) sortedKnown() []KnownDevice {
 	return ks
 }
 
-func loadConfig() *Config {
-	data, err := os.ReadFile(configPath())
-	if err != nil {
-		return nil
-	}
+// parseConfig decodes config JSON, migrating the legacy {mac, name} schema.
+// Returns nil if the data is unusable (unparseable or no current device).
+func parseConfig(data []byte) *Config {
 	var raw struct {
 		Current string        `json:"current"`
 		Known   []KnownDevice `json:"known"`
+		AutoLog bool          `json:"auto_log"`
 		MAC     string        `json:"mac"`  // legacy
 		Name    string        `json:"name"` // legacy
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil
 	}
-	cfg := &Config{Current: raw.Current, Known: raw.Known}
+	cfg := &Config{Current: raw.Current, Known: raw.Known, AutoLog: raw.AutoLog}
 	// Migrate legacy {mac, name} schema.
 	if cfg.Current == "" && raw.MAC != "" {
 		cfg.Current = raw.MAC
 		cfg.upsert(raw.MAC, raw.Name)
 	}
-	if cfg.Current == "" {
+	// A device-less config is still valid (selection happens via the tray) and
+	// must be kept so preferences like auto_log survive.
+	return cfg
+}
+
+func loadConfig() *Config {
+	data, err := os.ReadFile(configPath())
+	if err != nil {
 		return nil
 	}
-	return cfg
+	return parseConfig(data)
 }
 
 func saveConfig(c Config) error {
@@ -932,13 +938,13 @@ func (t *tray) loop() {
 			t.app.state.setLogging(false)
 			t.refresh()
 		case <-t.mAutoLog.ClickedCh:
+			// Only sets the launch preference; does not change current logging.
 			if t.mAutoLog.Checked() {
 				t.mAutoLog.Uncheck()
 				t.app.setAutoLog(false)
 			} else {
 				t.mAutoLog.Check()
 				t.app.setAutoLog(true)
-				t.app.state.setLogging(true) // start now; also persists for next launch
 			}
 			t.refresh()
 		case <-t.mAutostart.ClickedCh:
@@ -994,7 +1000,9 @@ func main() {
 	cfg := loadConfig()
 	if cfg == nil {
 		cfg = &Config{}
-		log.Println("no device configured — pick one from the tray ‘Switch device’ menu")
+	}
+	if cfg.Current == "" {
+		log.Println("no device configured — pick one from the tray ‘Devices’ menu")
 	} else {
 		log.Printf("using device: %s", cfg.Current)
 	}
