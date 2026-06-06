@@ -22,22 +22,23 @@ import (
 // ── constants ────────────────────────────────────────────────────────────────
 
 const (
-	fastRetries  = 3
-	fastInterval = 3 * time.Second
-
 	connectScanTimeout = 10 * time.Second
+
+	// After the finite (silent) schedule exhausts, reconnection continues
+	// forever at this interval.
+	indefiniteInterval = 60 * time.Second
 
 	maxSwitchSlots     = 8
 	switchScanDuration = 15 * time.Second
 )
 
+// retrySchedule is the finite, silent reconnection phase: 5×3s then 5×10s.
 var retrySchedule = []struct {
 	count    int
 	interval time.Duration
 }{
 	{5, 3 * time.Second},
 	{5, 10 * time.Second},
-	{3, 60 * time.Second},
 }
 
 var (
@@ -52,13 +53,13 @@ var (
 	errSessionDropped = errors.New("session_dropped")
 )
 
-//go:embed disconnected.png
+//go:embed assets/disconnected.png
 var imgDisconnected []byte
 
-//go:embed connected.png
+//go:embed assets/connected.png
 var imgConnected []byte
 
-//go:embed running.png
+//go:embed assets/running.png
 var imgRunning []byte
 
 // ── paths ────────────────────────────────────────────────────────────────────
@@ -108,6 +109,7 @@ func enableAutostart() error {
 		"Type=Application\n" +
 		"Name=Gotempo\n" +
 		"Exec=" + exe + "\n" +
+		"Icon=gotempo\n" +
 		"Hidden=false\n" +
 		"NoDisplay=false\n" +
 		"X-GNOME-Autostart-enabled=true\n"
@@ -330,26 +332,19 @@ type AppState struct {
 	mu        sync.Mutex
 	connected bool
 	logging   bool
-	gaveUp    bool
 	lastBPM   int
 	hasBPM    bool
 }
 
-func (s *AppState) snapshot() (connected, logging, gaveUp bool) {
+func (s *AppState) snapshot() (connected, logging bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.connected, s.logging, s.gaveUp
+	return s.connected, s.logging
 }
 
 func (s *AppState) setConnected(v bool) {
 	s.mu.Lock()
 	s.connected = v
-	s.mu.Unlock()
-}
-
-func (s *AppState) setGaveUp(v bool) {
-	s.mu.Lock()
-	s.gaveUp = v
 	s.mu.Unlock()
 }
 
@@ -368,7 +363,6 @@ func (s *AppState) resetBPM() {
 func (s *AppState) onConnect() {
 	s.mu.Lock()
 	s.connected = true
-	s.gaveUp = false
 	s.mu.Unlock()
 }
 
@@ -387,7 +381,6 @@ type App struct {
 
 	uiUpdates chan struct{}
 	stop      chan struct{}
-	retry     chan struct{}
 	switchCh  chan struct{}
 }
 
@@ -397,7 +390,6 @@ func newApp(cfg *Config) *App {
 		cfg:       cfg,
 		uiUpdates: make(chan struct{}, 1),
 		stop:      make(chan struct{}),
-		retry:     make(chan struct{}, 1),
 		switchCh:  make(chan struct{}, 1),
 	}
 }
@@ -449,13 +441,6 @@ func (a *App) signalUI() {
 	}
 }
 
-func (a *App) triggerRetry() {
-	select {
-	case a.retry <- struct{}{}:
-	default:
-	}
-}
-
 func (a *App) signalSwitch() {
 	select {
 	case a.switchCh <- struct{}{}:
@@ -488,7 +473,6 @@ func (a *App) switchTo(mac, name string) {
 	}
 
 	a.state.setConnected(false)
-	a.state.setGaveUp(false)
 	a.state.resetBPM()
 	a.signalSwitch()
 	a.signalUI()
@@ -577,11 +561,17 @@ func (a *App) runBLE() {
 	}
 }
 
-// connectLoop runs the retry state machine for a single device address.
-// It returns errStopped or errSwitched.
+// connectLoop runs the reconnection state machine for a single device address.
+// It retries silently through the finite schedule (5×3s, then 5×10s); a
+// reconnect during that phase is silent. When the finite schedule exhausts it
+// sends a single "device lost" notification and then retries forever at
+// indefiniteInterval. A reconnect during that phase notifies "reconnected" (via
+// connectOnce) and resets the schedule. It never gives up; it returns only
+// errStopped or errSwitched.
 func (a *App) connectLoop(addr bluetooth.Address) error {
-	notifiedLoss := false
 	schedule := makeSchedule()
+	attempt := 0
+	notifiedLoss := false
 
 	for {
 		select {
@@ -600,65 +590,29 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 			return errSwitched
 		}
 
-		hadSession := errors.Is(err, errSessionDropped)
-		if hadSession {
-			log.Println("[BLE] session ended; attempting fast reconnect")
+		if errors.Is(err, errSessionDropped) {
+			// A real session was held and then lost — start the schedule over.
+			log.Println("[BLE] session ended; reconnecting")
+			attempt = 0
+			notifiedLoss = false
 		} else {
 			log.Printf("[BLE] connect failed: %s", describeConnectErr(err))
 		}
 		a.state.setConnected(false)
 		a.signalUI()
 
-		if hadSession {
-			recovered := false
-			for i := 0; i < fastRetries; i++ {
-				select {
-				case <-a.stop:
-					return errStopped
-				case <-a.switchCh:
-					return errSwitched
-				case <-time.After(fastInterval):
-				}
-				e := a.connectOnce(addr, false)
-				if errors.Is(e, errStopped) {
-					return errStopped
-				}
-				if errors.Is(e, errSwitched) {
-					return errSwitched
-				}
-				if errors.Is(e, errSessionDropped) {
-					// Reconnected and held a session before dropping again.
-					recovered = true
-					break
-				}
+		var interval time.Duration
+		if attempt < len(schedule) {
+			interval = schedule[attempt]
+			attempt++
+		} else {
+			if !notifiedLoss {
+				notify("device lost")
+				notifiedLoss = true
 			}
-			if recovered {
-				notifiedLoss = false
-				schedule = makeSchedule()
-				continue
-			}
-			notify("connection lost")
-			notifiedLoss = true
-			a.signalUI()
+			interval = indefiniteInterval
 		}
 
-		if len(schedule) == 0 {
-			a.state.setGaveUp(true)
-			a.signalUI()
-			notify("could not connect to device")
-			select {
-			case <-a.stop:
-				return errStopped
-			case <-a.switchCh:
-				return errSwitched
-			case <-a.retry:
-			}
-			schedule = makeSchedule()
-			notifiedLoss = false
-			continue
-		}
-		interval := schedule[0]
-		schedule = schedule[1:]
 		select {
 		case <-a.stop:
 			return errStopped
@@ -768,7 +722,6 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 type tray struct {
 	app *App
 
-	mRetry     *systray.MenuItem
 	mStartLog  *systray.MenuItem
 	mStopLog   *systray.MenuItem
 	mAutoLog   *systray.MenuItem
@@ -853,10 +806,10 @@ func slotLabel(e deviceEntry, current bool) string {
 }
 
 func (t *tray) refresh() {
-	connected, logging, gaveUp := t.app.state.snapshot()
+	connected, logging := t.app.state.snapshot()
 
 	switch {
-	case gaveUp || !connected:
+	case !connected:
 		systray.SetIcon(imgDisconnected)
 	case logging:
 		systray.SetIcon(imgRunning)
@@ -864,13 +817,8 @@ func (t *tray) refresh() {
 		systray.SetIcon(imgConnected)
 	}
 
-	if gaveUp {
-		t.mRetry.Show()
-	} else {
-		t.mRetry.Hide()
-	}
 	// Logging controls are always visible; greyed out when not actionable.
-	if connected && !logging && !gaveUp {
+	if connected && !logging {
 		t.mStartLog.Enable()
 	} else {
 		t.mStartLog.Disable()
@@ -937,13 +885,9 @@ func (t *tray) loop(autoScan bool) {
 		select {
 		case <-t.app.uiUpdates:
 			t.refresh()
-		case <-t.mRetry.ClickedCh:
-			t.app.state.setGaveUp(false)
-			t.app.triggerRetry()
-			t.refresh()
 		case <-t.mStartLog.ClickedCh:
-			connected, logging, gaveUp := t.app.state.snapshot()
-			if connected && !logging && !gaveUp {
+			connected, logging := t.app.state.snapshot()
+			if connected && !logging {
 				t.app.state.setLogging(true)
 			}
 			t.refresh()
@@ -1034,7 +978,6 @@ func main() {
 
 		t := &tray{
 			app:        app,
-			mRetry:     systray.AddMenuItem("Retry", ""),
 			mStartLog:  systray.AddMenuItem("Start logging", ""),
 			mStopLog:   systray.AddMenuItem("Stop logging", ""),
 			slotMACs:   make([]string, maxSwitchSlots),
@@ -1066,8 +1009,6 @@ func main() {
 		t.mAutoLog = systray.AddMenuItemCheckbox("Autostart HR log", "", app.snapshotConfig().AutoLog)
 		t.mAutostart = systray.AddMenuItemCheckbox("Start on boot", "", autostartEnabled())
 		t.mQuit = systray.AddMenuItem("Quit", "")
-
-		t.mRetry.Hide()
 
 		// loop owns all UI mutation; auto-scan on startup if no device is set.
 		go t.loop(app.currentMAC() == "")

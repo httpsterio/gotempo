@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=gotempo
+Comment=Heart-rate monitor tray app
+Exec=gotempo
+Icon=gotempo
+Terminal=false
+Categories=Utility;
