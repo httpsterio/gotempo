@@ -3,11 +3,13 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,11 +22,11 @@ import (
 // ── constants ────────────────────────────────────────────────────────────────
 
 const (
-	hrServiceUUIDStr = "0000180d-0000-1000-8000-00805f9b34fb"
-	hrCharUUIDStr    = "00002a37-0000-1000-8000-00805f9b34fb"
-
 	fastRetries  = 3
 	fastInterval = 3 * time.Second
+
+	maxSwitchSlots     = 8
+	switchScanDuration = 15 * time.Second
 )
 
 var retrySchedule = []struct {
@@ -39,6 +41,13 @@ var retrySchedule = []struct {
 var (
 	hrServiceUUID = bluetooth.New16BitUUID(0x180D)
 	hrCharUUID    = bluetooth.New16BitUUID(0x2A37)
+)
+
+// Sentinel errors flowing out of the connection loop.
+var (
+	errStopped        = errors.New("stopped")
+	errSwitched       = errors.New("switched")
+	errSessionDropped = errors.New("session_dropped")
 )
 
 //go:embed disconnected.png
@@ -154,9 +163,57 @@ func describeConnectErr(err error) string {
 
 // ── config ───────────────────────────────────────────────────────────────────
 
+type KnownDevice struct {
+	MAC      string `json:"mac"`
+	Name     string `json:"name"`
+	LastUsed string `json:"last_used,omitempty"` // RFC3339 UTC, set on successful connect
+}
+
 type Config struct {
-	MAC  string `json:"mac"`
-	Name string `json:"name"`
+	Current string        `json:"current"`
+	Known   []KnownDevice `json:"known"`
+}
+
+func (c Config) clone() Config {
+	out := Config{Current: c.Current}
+	out.Known = append([]KnownDevice(nil), c.Known...)
+	return out
+}
+
+// upsert adds the device if absent, or updates its name if a non-empty one is
+// supplied. It never clears an existing last_used timestamp.
+func (c *Config) upsert(mac, name string) {
+	for i := range c.Known {
+		if strings.EqualFold(c.Known[i].MAC, mac) {
+			if name != "" {
+				c.Known[i].Name = name
+			}
+			return
+		}
+	}
+	c.Known = append(c.Known, KnownDevice{MAC: mac, Name: name})
+}
+
+// touch stamps the device's last_used with the current time, adding it if absent.
+func (c *Config) touch(mac string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	for i := range c.Known {
+		if strings.EqualFold(c.Known[i].MAC, mac) {
+			c.Known[i].LastUsed = now
+			return
+		}
+	}
+	c.Known = append(c.Known, KnownDevice{MAC: mac, LastUsed: now})
+}
+
+// sortedKnown returns a copy of known devices ordered most-recently-used first.
+// Never-used devices (empty last_used) sort last.
+func (c Config) sortedKnown() []KnownDevice {
+	ks := append([]KnownDevice(nil), c.Known...)
+	sort.SliceStable(ks, func(i, j int) bool {
+		return ks[i].LastUsed > ks[j].LastUsed
+	})
+	return ks
 }
 
 func loadConfig() *Config {
@@ -164,14 +221,25 @@ func loadConfig() *Config {
 	if err != nil {
 		return nil
 	}
-	var c Config
-	if err := json.Unmarshal(data, &c); err != nil {
+	var raw struct {
+		Current string        `json:"current"`
+		Known   []KnownDevice `json:"known"`
+		MAC     string        `json:"mac"`  // legacy
+		Name    string        `json:"name"` // legacy
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil
 	}
-	if c.MAC == "" || c.Name == "" {
+	cfg := &Config{Current: raw.Current, Known: raw.Known}
+	// Migrate legacy {mac, name} schema.
+	if cfg.Current == "" && raw.MAC != "" {
+		cfg.Current = raw.MAC
+		cfg.upsert(raw.MAC, raw.Name)
+	}
+	if cfg.Current == "" {
 		return nil
 	}
-	return &c
+	return cfg
 }
 
 func saveConfig(c Config) error {
@@ -182,64 +250,32 @@ func saveConfig(c Config) error {
 	return os.WriteFile(configPath(), data, 0644)
 }
 
-func scanAndSelect(adapter *bluetooth.Adapter) Config {
-	fmt.Println("Scanning for heart-rate monitors (15 s)…")
-
-	type found struct{ addr, name string }
-	seen := map[string]found{}
-
-	stopAt := time.AfterFunc(15*time.Second, func() {
-		_ = adapter.StopScan()
-	})
-	defer stopAt.Stop()
+// scanDevices runs a blocking BLE scan for the given duration and returns the
+// distinct heart-rate monitors seen.
+func scanDevices(adapter *bluetooth.Adapter, d time.Duration) []KnownDevice {
+	seen := map[string]KnownDevice{}
+	timer := time.AfterFunc(d, func() { _ = adapter.StopScan() })
+	defer timer.Stop()
 
 	err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
 		if !r.HasServiceUUID(hrServiceUUID) {
 			return
 		}
-		addr := r.Address.MAC.String()
-		if _, ok := seen[addr]; ok {
+		mac := r.Address.MAC.String()
+		if _, ok := seen[mac]; ok {
 			return
 		}
-		seen[addr] = found{addr, r.LocalName()}
+		seen[mac] = KnownDevice{MAC: mac, Name: r.LocalName()}
 	})
 	if err != nil {
 		log.Println("scan error:", err)
-		os.Exit(1)
 	}
 
-	if len(seen) == 0 {
-		log.Println("no heart-rate devices found — make sure the H10 is awake and dual-BLE is enabled")
-		os.Exit(1)
+	out := make([]KnownDevice, 0, len(seen))
+	for _, k := range seen {
+		out = append(out, k)
 	}
-
-	list := make([]found, 0, len(seen))
-	for _, f := range seen {
-		list = append(list, f)
-	}
-	for i, f := range list {
-		fmt.Printf("  %d. %s  (%s)\n", i+1, f.name, f.addr)
-	}
-
-	var choice int
-	for {
-		fmt.Print("Select device number: ")
-		var line string
-		if _, err := fmt.Scanln(&line); err == nil {
-			if n, err := strconv.Atoi(line); err == nil && n >= 1 && n <= len(list) {
-				choice = n
-				break
-			}
-		}
-		fmt.Println("Invalid choice.")
-	}
-	sel := list[choice-1]
-	c := Config{MAC: sel.addr, Name: sel.name}
-	if err := saveConfig(c); err != nil {
-		log.Println("save config error:", err)
-	}
-	log.Printf("saved: %s (%s)", sel.name, sel.addr)
-	return c
+	return out
 }
 
 // ── shared state ─────────────────────────────────────────────────────────────
@@ -277,6 +313,12 @@ func (s *AppState) setLogging(v bool) {
 	s.mu.Unlock()
 }
 
+func (s *AppState) resetBPM() {
+	s.mu.Lock()
+	s.hasBPM = false
+	s.mu.Unlock()
+}
+
 func (s *AppState) onConnect() {
 	s.mu.Lock()
 	s.connected = true
@@ -287,23 +329,27 @@ func (s *AppState) onConnect() {
 // ── app ──────────────────────────────────────────────────────────────────────
 
 type App struct {
-	mac     string
 	state   *AppState
 	adapter *bluetooth.Adapter
+
+	cfgMu sync.Mutex
+	cfg   *Config
 
 	uiUpdates chan struct{}
 	stop      chan struct{}
 	retry     chan struct{}
+	switchCh  chan struct{}
 }
 
-func newApp(mac string, adapter *bluetooth.Adapter) *App {
+func newApp(cfg *Config, adapter *bluetooth.Adapter) *App {
 	return &App{
-		mac:       mac,
 		state:     &AppState{},
 		adapter:   adapter,
+		cfg:       cfg,
 		uiUpdates: make(chan struct{}, 1),
 		stop:      make(chan struct{}),
 		retry:     make(chan struct{}, 1),
+		switchCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -318,6 +364,56 @@ func (a *App) triggerRetry() {
 	select {
 	case a.retry <- struct{}{}:
 	default:
+	}
+}
+
+func (a *App) signalSwitch() {
+	select {
+	case a.switchCh <- struct{}{}:
+	default:
+	}
+}
+
+func (a *App) currentMAC() string {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	return a.cfg.Current
+}
+
+func (a *App) snapshotConfig() Config {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	return a.cfg.clone()
+}
+
+// switchTo changes the active device, persists the config, and wakes the BLE
+// worker so it reconnects against the new MAC.
+func (a *App) switchTo(mac, name string) {
+	a.cfgMu.Lock()
+	a.cfg.Current = mac
+	a.cfg.upsert(mac, name)
+	snap := a.cfg.clone()
+	a.cfgMu.Unlock()
+	if err := saveConfig(snap); err != nil {
+		log.Printf("config save: %v", err)
+	}
+
+	a.state.setConnected(false)
+	a.state.setGaveUp(false)
+	a.state.resetBPM()
+	a.signalSwitch()
+	a.signalUI()
+	log.Printf("[BLE] switching to %s (%s)", name, mac)
+}
+
+// markConnected records a successful connection's timestamp and persists it.
+func (a *App) markConnected(mac string) {
+	a.cfgMu.Lock()
+	a.cfg.touch(mac)
+	snap := a.cfg.clone()
+	a.cfgMu.Unlock()
+	if err := saveConfig(snap); err != nil {
+		log.Printf("config save: %v", err)
 	}
 }
 
@@ -352,17 +448,10 @@ func makeSchedule() []time.Duration {
 	return s
 }
 
+// runBLE is the top-level worker. It (re-)reads the current device on every
+// outer iteration so a switch simply causes the inner loop to return and the
+// new MAC to be picked up.
 func (a *App) runBLE() {
-	parsed, err := bluetooth.ParseMAC(a.mac)
-	if err != nil {
-		log.Println("invalid mac:", err)
-		return
-	}
-	addr := bluetooth.Address{MACAddress: bluetooth.MACAddress{MAC: parsed}}
-
-	notifiedLoss := false
-	schedule := makeSchedule()
-
 	for {
 		select {
 		case <-a.stop:
@@ -370,12 +459,59 @@ func (a *App) runBLE() {
 		default:
 		}
 
-		err := a.connectOnce(addr, notifiedLoss)
-		if err == nil {
-			return // stop requested
+		mac := a.currentMAC()
+		if mac == "" {
+			// No device chosen yet — idle until one is picked from the tray.
+			select {
+			case <-a.stop:
+				return
+			case <-a.switchCh:
+				continue
+			}
+		}
+		parsed, err := bluetooth.ParseMAC(mac)
+		if err != nil {
+			log.Println("invalid mac:", err)
+			select {
+			case <-a.stop:
+				return
+			case <-a.switchCh:
+				continue
+			}
+		}
+		addr := bluetooth.Address{MACAddress: bluetooth.MACAddress{MAC: parsed}}
+
+		if errors.Is(a.connectLoop(addr), errStopped) {
+			return
+		}
+		// errSwitched → fall through, re-read MAC.
+	}
+}
+
+// connectLoop runs the retry state machine for a single device address.
+// It returns errStopped or errSwitched.
+func (a *App) connectLoop(addr bluetooth.Address) error {
+	notifiedLoss := false
+	schedule := makeSchedule()
+
+	for {
+		select {
+		case <-a.stop:
+			return errStopped
+		case <-a.switchCh:
+			return errSwitched
+		default:
 		}
 
-		hadSession := err.Error() == "session_dropped"
+		err := a.connectOnce(addr, notifiedLoss)
+		if errors.Is(err, errStopped) {
+			return errStopped
+		}
+		if errors.Is(err, errSwitched) {
+			return errSwitched
+		}
+
+		hadSession := errors.Is(err, errSessionDropped)
 		if hadSession {
 			log.Println("[BLE] session ended; attempting fast reconnect")
 		} else {
@@ -389,10 +525,20 @@ func (a *App) runBLE() {
 			for i := 0; i < fastRetries; i++ {
 				select {
 				case <-a.stop:
-					return
+					return errStopped
+				case <-a.switchCh:
+					return errSwitched
 				case <-time.After(fastInterval):
 				}
-				if err := a.connectOnce(addr, false); err == nil {
+				e := a.connectOnce(addr, false)
+				if errors.Is(e, errStopped) {
+					return errStopped
+				}
+				if errors.Is(e, errSwitched) {
+					return errSwitched
+				}
+				if errors.Is(e, errSessionDropped) {
+					// Reconnected and held a session before dropping again.
 					recovered = true
 					break
 				}
@@ -410,10 +556,12 @@ func (a *App) runBLE() {
 		if len(schedule) == 0 {
 			a.state.setGaveUp(true)
 			a.signalUI()
-			notify("could not connect to H10")
+			notify("could not connect to device")
 			select {
 			case <-a.stop:
-				return
+				return errStopped
+			case <-a.switchCh:
+				return errSwitched
 			case <-a.retry:
 			}
 			schedule = makeSchedule()
@@ -424,16 +572,17 @@ func (a *App) runBLE() {
 		schedule = schedule[1:]
 		select {
 		case <-a.stop:
-			return
+			return errStopped
+		case <-a.switchCh:
+			return errSwitched
 		case <-time.After(interval):
 		}
 	}
 }
 
-// connectOnce attempts one connection. Returns nil if stop was requested
-// mid-session. Returns an error otherwise — "session_dropped" if a real
-// session was established and then lost, or another error if the attempt
-// failed before subscription succeeded.
+// connectOnce attempts one connection and, on success, blocks until the session
+// ends. It always returns a sentinel error: errStopped, errSwitched,
+// errSessionDropped, or a raw connect/discovery error.
 func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 	log.Printf("[BLE] connecting to %s…", addr.MAC.String())
 	device, err := a.adapter.Connect(addr, bluetooth.ConnectionParams{})
@@ -483,25 +632,32 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 
 	log.Println("[BLE] connected")
 	a.state.onConnect()
+	a.markConnected(addr.MAC.String())
 	if wasNotified {
 		notify("reconnected")
 	}
 	a.signalUI()
+
+	cleanup := func() {
+		_ = chars[0].EnableNotifications(nil)
+		_ = device.Disconnect()
+	}
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-a.stop:
-			_ = chars[0].EnableNotifications(nil)
-			_ = device.Disconnect()
-			return nil
+			cleanup()
+			return errStopped
+		case <-a.switchCh:
+			cleanup()
+			return errSwitched
 		case <-ticker.C:
 			connected, err := device.Connected()
 			if err != nil || !connected {
-				_ = chars[0].EnableNotifications(nil)
-				_ = device.Disconnect()
-				return fmt.Errorf("session_dropped")
+				cleanup()
+				return errSessionDropped
 			}
 		}
 	}
@@ -510,12 +666,88 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 // ── tray ─────────────────────────────────────────────────────────────────────
 
 type tray struct {
-	app        *App
+	app *App
+
 	mRetry     *systray.MenuItem
 	mStartLog  *systray.MenuItem
 	mStopLog   *systray.MenuItem
 	mAutostart *systray.MenuItem
 	mQuit      *systray.MenuItem
+
+	mSwitch     *systray.MenuItem
+	switchSlots []*systray.MenuItem
+	slotMACs    []string
+	slotNames   []string
+	mScanning   *systray.MenuItem
+	mRescan     *systray.MenuItem
+
+	slotClicks  chan int
+	scanDone    chan []KnownDevice
+	lastScanned []KnownDevice
+	scanning    bool
+}
+
+// deviceEntry is one rendered row in the switch submenu.
+type deviceEntry struct {
+	mac, name string
+	lastUsed  string
+	known     bool
+}
+
+// buildEntries merges known devices (recent first) with freshly scanned
+// unknowns, capping at maxSwitchSlots.
+func buildEntries(cfg Config, scanned []KnownDevice) []deviceEntry {
+	var entries []deviceEntry
+	knownSet := map[string]bool{}
+	for _, k := range cfg.sortedKnown() {
+		knownSet[strings.ToUpper(k.MAC)] = true
+		entries = append(entries, deviceEntry{mac: k.MAC, name: k.Name, lastUsed: k.LastUsed, known: true})
+	}
+	for _, s := range scanned {
+		if knownSet[strings.ToUpper(s.MAC)] {
+			continue
+		}
+		entries = append(entries, deviceEntry{mac: s.MAC, name: s.Name, known: false})
+	}
+	if len(entries) > maxSwitchSlots {
+		entries = entries[:maxSwitchSlots]
+	}
+	return entries
+}
+
+func humanizeSince(ts string) string {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
+func slotLabel(e deviceEntry, current bool) string {
+	name := e.name
+	if name == "" {
+		name = e.mac
+	}
+	switch {
+	case current:
+		return "● " + name + " (current)"
+	case !e.known:
+		return name + " — new"
+	case e.lastUsed == "":
+		return name
+	default:
+		return name + " — " + humanizeSince(e.lastUsed)
+	}
 }
 
 func (t *tray) refresh() {
@@ -545,6 +777,44 @@ func (t *tray) refresh() {
 	} else {
 		t.mStopLog.Hide()
 	}
+
+	t.renderSwitch()
+}
+
+func (t *tray) renderSwitch() {
+	cfg := t.app.snapshotConfig()
+	entries := buildEntries(cfg, t.lastScanned)
+	for i, s := range t.switchSlots {
+		if i < len(entries) {
+			e := entries[i]
+			isCur := strings.EqualFold(e.mac, cfg.Current)
+			s.SetTitle(slotLabel(e, isCur))
+			if isCur {
+				s.Disable()
+			} else {
+				s.Enable()
+			}
+			t.slotMACs[i] = e.mac
+			t.slotNames[i] = e.name
+			s.Show()
+		} else {
+			t.slotMACs[i] = ""
+			t.slotNames[i] = ""
+			s.Hide()
+		}
+	}
+}
+
+func (t *tray) startScan() {
+	if t.scanning {
+		return
+	}
+	t.scanning = true
+	t.mScanning.Show()
+	t.mRescan.Disable()
+	go func() {
+		t.scanDone <- scanDevices(t.app.adapter, switchScanDuration)
+	}()
 }
 
 func (t *tray) loop() {
@@ -576,6 +846,21 @@ func (t *tray) loop() {
 					t.mAutostart.Check()
 				}
 			}
+		case i := <-t.slotClicks:
+			mac := t.slotMACs[i]
+			name := t.slotNames[i]
+			if mac == "" || strings.EqualFold(mac, t.app.currentMAC()) {
+				break
+			}
+			t.app.switchTo(mac, name)
+		case <-t.mRescan.ClickedCh:
+			t.startScan()
+		case res := <-t.scanDone:
+			t.scanning = false
+			t.mScanning.Hide()
+			t.mRescan.Enable()
+			t.lastScanned = res
+			t.renderSwitch()
 		case <-t.mQuit.ClickedCh:
 			close(t.app.stop)
 			systray.Quit()
@@ -599,15 +884,17 @@ func main() {
 
 	cfg := loadConfig()
 	if cfg == nil {
-		c := scanAndSelect(adapter)
-		cfg = &c
+		cfg = &Config{}
+		log.Println("no device configured — pick one from the tray ‘Switch device’ menu")
+	} else {
+		log.Printf("using device: %s", cfg.Current)
 	}
-	log.Printf("using device: %s (%s)", cfg.Name, cfg.MAC)
 
-	app := newApp(cfg.MAC, adapter)
+	app := newApp(cfg, adapter)
 
 	systray.Run(func() {
 		systray.SetIcon(imgDisconnected)
+		systray.SetTitle("gotempo") // stable SNI Id so the panel remembers the item
 		systray.SetTooltip("gotempo")
 
 		t := &tray{
@@ -615,15 +902,45 @@ func main() {
 			mRetry:     systray.AddMenuItem("Retry", ""),
 			mStartLog:  systray.AddMenuItem("Start logging", ""),
 			mStopLog:   systray.AddMenuItem("Stop logging", ""),
-			mAutostart: systray.AddMenuItemCheckbox("Start on boot", "", autostartEnabled()),
-			mQuit:      systray.AddMenuItem("Quit", ""),
+			slotMACs:   make([]string, maxSwitchSlots),
+			slotNames:  make([]string, maxSwitchSlots),
+			slotClicks: make(chan int),
+			scanDone:   make(chan []KnownDevice, 1),
 		}
+
+		t.mSwitch = systray.AddMenuItem("Switch device", "")
+		for i := 0; i < maxSwitchSlots; i++ {
+			slot := t.mSwitch.AddSubMenuItem("", "")
+			slot.Hide()
+			t.switchSlots = append(t.switchSlots, slot)
+			idx := i
+			go func() {
+				for range slot.ClickedCh {
+					t.slotClicks <- idx
+				}
+			}()
+		}
+		t.mScanning = t.mSwitch.AddSubMenuItem("Scanning…", "")
+		t.mScanning.Disable()
+		t.mScanning.Hide()
+		t.mRescan = t.mSwitch.AddSubMenuItem("Rescan for new devices", "")
+
+		t.mAutostart = systray.AddMenuItemCheckbox("Start on boot", "", autostartEnabled())
+		t.mQuit = systray.AddMenuItem("Quit", "")
+
 		t.mRetry.Hide()
 		t.mStartLog.Hide()
 		t.mStopLog.Hide()
+		t.renderSwitch()
 
 		go t.loop()
 		go app.runBLE()
+
+		// With no device configured, scan straight away so the user can pick
+		// one from the Switch device submenu.
+		if app.currentMAC() == "" {
+			t.startScan()
+		}
 	}, func() {
 		// onExit
 	})
