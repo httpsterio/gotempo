@@ -155,6 +155,9 @@ class TrayApp:
 # ── BLE worker ────────────────────────────────────────────────────────────────
 
 class BLEWorker:
+    FAST_RETRIES  = 3
+    FAST_INTERVAL = 3
+
     def __init__(self, mac: str, state: AppState, tray: "TrayApp"):
         self.mac   = mac
         self.state = state
@@ -176,46 +179,62 @@ class BLEWorker:
         asyncio.run(self._connect_loop())
 
     async def _connect_loop(self):
-        attempt = 0
         notified_loss = False
 
-        def _schedule_interval():
-            used = 0
+        def _full_schedule():
             for count, interval in RETRY_SCHEDULE:
                 for _ in range(count):
                     yield interval
-                    used += 1
-            # exhausted
-            return
 
-        gen = _schedule_interval()
+        main_gen = _full_schedule()
 
         while not self._stop_event.is_set():
+            had_session = False
             try:
-                interval = next(gen)
+                await self._connect_once(notified_loss)
+                return  # only returns normally when stop is requested
+            except Exception as e:
+                had_session = str(e) == "session_dropped"
+                print(f"[BLE] dropped: {e}")
+                self.state.set(connected=False)
+                self.tray.refresh()
+
+            if had_session:
+                recovered = False
+                for _ in range(self.FAST_RETRIES):
+                    if self._stop_event.is_set():
+                        return
+                    await asyncio.sleep(self.FAST_INTERVAL)
+                    try:
+                        await self._connect_once(False)
+                        recovered = True
+                        break
+                    except Exception:
+                        pass
+
+                if recovered:
+                    notified_loss = False
+                    main_gen = _full_schedule()
+                    continue
+                else:
+                    notify("connection lost")
+                    notified_loss = True
+                    self.tray.refresh()
+
+            try:
+                interval = next(main_gen)
             except StopIteration:
-                # gave up
-                self.state.set(connected=False, gave_up=True)
+                self.state.set(gave_up=True)
                 self.tray.refresh()
                 notify("could not connect to H10")
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, self._retry_event.wait)
                 self._retry_event.clear()
-                gen = _schedule_interval()
+                main_gen = _full_schedule()
                 notified_loss = False
                 continue
 
-            try:
-                await self._connect_once(notified_loss)
-                # successful session — reset on next drop
-                gen = _schedule_interval()
-                notified_loss = False
-                attempt = 0
-            except Exception as e:
-                print(f"[BLE] connection error: {e}")
-                self.state.set(connected=False)
-                self.tray.refresh()
-                await asyncio.sleep(interval)
+            await asyncio.sleep(interval)
 
     async def _connect_once(self, was_notified: bool):
         print(f"[BLE] scanning for {self.mac}…")
@@ -265,82 +284,6 @@ class BLEWorker:
             except Exception as e:
                 print(f"[BPM] could not write output: {e}")
 
-# ── fast-retry wrapper for mid-session drops ──────────────────────────────────
-
-class BLEWorkerWithFastRetry(BLEWorker):
-    FAST_RETRIES   = 3
-    FAST_INTERVAL  = 3
-
-    async def _connect_loop(self):
-        was_connected = False
-        notified_loss = False
-
-        def _schedule():
-            for interval in (self._full_schedule()):
-                yield interval
-
-        def _full_schedule():
-            for count, interval in RETRY_SCHEDULE:
-                for _ in range(count):
-                    yield interval
-
-        main_gen = _full_schedule()
-
-        while not self._stop_event.is_set():
-            try:
-                await self._connect_once(notified_loss)
-                was_connected = True
-                notified_loss = False
-                main_gen = _full_schedule()
-            except Exception as e:
-                if str(e) == "session_dropped":
-                    was_connected = True
-                print(f"[BLE] dropped: {e}")
-                self.state.set(connected=False)
-
-                if was_connected:
-                    # fast retries first
-                    recovered = False
-                    logging_was_active = self.state.get("logging")
-                    for i in range(self.FAST_RETRIES):
-                        if self._stop_event.is_set():
-                            return
-                        await asyncio.sleep(self.FAST_INTERVAL)
-                        try:
-                            await self._connect_once(False)
-                            recovered = True
-                            break
-                        except Exception:
-                            pass
-
-                    if recovered:
-                        was_connected = True
-                        notified_loss = False
-                        main_gen = _full_schedule()
-                        continue
-                    else:
-                        notify("connection lost")
-                        notified_loss = True
-                        self.tray.refresh()
-                        was_connected = False
-
-                # fall through to main retry schedule
-                try:
-                    interval = next(main_gen)
-                except StopIteration:
-                    self.state.set(gave_up=True)
-                    self.tray.refresh()
-                    notify("could not connect to H10")
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, self._retry_event.wait)
-                    self._retry_event.clear()
-                    main_gen = _full_schedule()
-                    notified_loss = False
-                    was_connected = False
-                    continue
-
-                await asyncio.sleep(interval)
-
 # ── entry point ───────────────────────────────────────────────────────────────
 
 def main():
@@ -354,11 +297,9 @@ def main():
 
     state = AppState()
 
-    # tray and worker reference each other; build tray with a placeholder worker
-    # then assign
-    worker = BLEWorkerWithFastRetry.__new__(BLEWorkerWithFastRetry)
+    worker = BLEWorker.__new__(BLEWorker)
     tray   = TrayApp(state, worker)
-    BLEWorkerWithFastRetry.__init__(worker, mac, state, tray)
+    BLEWorker.__init__(worker, mac, state, tray)
 
     worker.start()
     tray.run()  # blocks on main thread
