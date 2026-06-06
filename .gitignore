@@ -1,3 +1,4 @@
 gotempo
 config.json
 logs/
+.claude/
