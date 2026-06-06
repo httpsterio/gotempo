@@ -25,6 +25,8 @@ const (
 	fastRetries  = 3
 	fastInterval = 3 * time.Second
 
+	connectScanTimeout = 10 * time.Second
+
 	maxSwitchSlots     = 8
 	switchScanDuration = 15 * time.Second
 )
@@ -172,6 +174,7 @@ type KnownDevice struct {
 type Config struct {
 	Current string        `json:"current"`
 	Known   []KnownDevice `json:"known"`
+	AutoLog bool          `json:"auto_log,omitempty"` // start logging automatically on launch
 }
 
 func (c Config) clone() Config {
@@ -252,12 +255,21 @@ func saveConfig(c Config) error {
 
 // scanDevices runs a blocking BLE scan for the given duration and returns the
 // distinct heart-rate monitors seen.
-func scanDevices(adapter *bluetooth.Adapter, d time.Duration) []KnownDevice {
+func (a *App) scanDevices(d time.Duration) []KnownDevice {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+
+	adapter, err := a.ensureAdapter()
+	if err != nil {
+		log.Println("[BLE] scan skipped:", err)
+		return nil
+	}
+
 	seen := map[string]KnownDevice{}
 	timer := time.AfterFunc(d, func() { _ = adapter.StopScan() })
 	defer timer.Stop()
 
-	err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
+	if err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
 		if !r.HasServiceUUID(hrServiceUUID) {
 			return
 		}
@@ -266,8 +278,7 @@ func scanDevices(adapter *bluetooth.Adapter, d time.Duration) []KnownDevice {
 			return
 		}
 		seen[mac] = KnownDevice{MAC: mac, Name: r.LocalName()}
-	})
-	if err != nil {
+	}); err != nil {
 		log.Println("scan error:", err)
 	}
 
@@ -276,6 +287,35 @@ func scanDevices(adapter *bluetooth.Adapter, d time.Duration) []KnownDevice {
 		out = append(out, k)
 	}
 	return out
+}
+
+// findDevice scans until the target MAC is seen (or the timeout elapses). This
+// re-populates BlueZ's device cache so a subsequent connect-by-address works,
+// which is required after the adapter has been power-cycled.
+func (a *App) findDevice(target string, d time.Duration) (*bluetooth.Adapter, bool) {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+
+	adapter, err := a.ensureAdapter()
+	if err != nil {
+		log.Println("[BLE] scan skipped:", err)
+		return nil, false
+	}
+
+	found := false
+	timer := time.AfterFunc(d, func() { _ = adapter.StopScan() })
+	defer timer.Stop()
+
+	if err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
+		if strings.EqualFold(r.Address.MAC.String(), target) {
+			found = true
+			_ = adapter.StopScan()
+		}
+	}); err != nil {
+		log.Println("scan error:", err)
+		return adapter, false
+	}
+	return adapter, found
 }
 
 // ── shared state ─────────────────────────────────────────────────────────────
@@ -329,8 +369,12 @@ func (s *AppState) onConnect() {
 // ── app ──────────────────────────────────────────────────────────────────────
 
 type App struct {
-	state   *AppState
-	adapter *bluetooth.Adapter
+	state *AppState
+
+	adapterMu sync.Mutex
+	adapter   *bluetooth.Adapter // current adapter; may be re-resolved if it disappears
+
+	scanMu sync.Mutex // serializes BLE scans (only one in flight at a time)
 
 	cfgMu sync.Mutex
 	cfg   *Config
@@ -341,16 +385,55 @@ type App struct {
 	switchCh  chan struct{}
 }
 
-func newApp(cfg *Config, adapter *bluetooth.Adapter) *App {
+func newApp(cfg *Config) *App {
 	return &App{
-		state:     &AppState{},
-		adapter:   adapter,
+		state:     &AppState{logging: cfg.AutoLog}, // autostart logging if enabled
 		cfg:       cfg,
 		uiUpdates: make(chan struct{}, 1),
 		stop:      make(chan struct{}),
 		retry:     make(chan struct{}, 1),
 		switchCh:  make(chan struct{}, 1),
 	}
+}
+
+// setAutoLog persists the autostart-logging preference (without changing the
+// current logging state).
+func (a *App) setAutoLog(v bool) {
+	a.cfgMu.Lock()
+	a.cfg.AutoLog = v
+	snap := a.cfg.clone()
+	a.cfgMu.Unlock()
+	if err := saveConfig(snap); err != nil {
+		log.Printf("config save: %v", err)
+	}
+}
+
+// ensureAdapter returns a usable, enabled adapter. It reuses the current one if
+// it is still alive, otherwise it scans hci0..hci9 for one that enables. The hci
+// index can change when the user power-cycles Bluetooth, so this must be
+// re-checked before every scan/connect rather than resolved once at startup.
+func (a *App) ensureAdapter() (*bluetooth.Adapter, error) {
+	a.adapterMu.Lock()
+	defer a.adapterMu.Unlock()
+
+	if a.adapter != nil {
+		if err := a.adapter.Enable(); err == nil {
+			return a.adapter, nil
+		}
+	}
+	for i := 0; i < 10; i++ {
+		cand := bluetooth.NewAdapter(fmt.Sprintf("hci%d", i))
+		if err := cand.Enable(); err == nil {
+			if a.adapter == nil {
+				log.Printf("[BLE] using adapter hci%d", i)
+			} else {
+				log.Printf("[BLE] adapter changed to hci%d", i)
+			}
+			a.adapter = cand
+			return cand, nil
+		}
+	}
+	return nil, errors.New("no bluetooth adapter available")
 }
 
 func (a *App) signalUI() {
@@ -584,8 +667,19 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 // ends. It always returns a sentinel error: errStopped, errSwitched,
 // errSessionDropped, or a raw connect/discovery error.
 func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
+	// Scan first so BlueZ has a fresh device object (and to pick up an adapter
+	// index change). This mirrors the proven find-then-connect flow.
+	log.Printf("[BLE] scanning for %s…", addr.MAC.String())
+	adapter, ok := a.findDevice(addr.MAC.String(), connectScanTimeout)
+	if adapter == nil {
+		return errors.New("no bluetooth adapter available")
+	}
+	if !ok {
+		return fmt.Errorf("device %s not found in scan", addr.MAC.String())
+	}
+
 	log.Printf("[BLE] connecting to %s…", addr.MAC.String())
-	device, err := a.adapter.Connect(addr, bluetooth.ConnectionParams{})
+	device, err := adapter.Connect(addr, bluetooth.ConnectionParams{})
 	if err != nil {
 		return err
 	}
@@ -671,6 +765,7 @@ type tray struct {
 	mRetry     *systray.MenuItem
 	mStartLog  *systray.MenuItem
 	mStopLog   *systray.MenuItem
+	mAutoLog   *systray.MenuItem
 	mAutostart *systray.MenuItem
 	mQuit      *systray.MenuItem
 
@@ -767,15 +862,16 @@ func (t *tray) refresh() {
 	} else {
 		t.mRetry.Hide()
 	}
+	// Logging controls are always visible; greyed out when not actionable.
 	if connected && !logging && !gaveUp {
-		t.mStartLog.Show()
+		t.mStartLog.Enable()
 	} else {
-		t.mStartLog.Hide()
+		t.mStartLog.Disable()
 	}
 	if connected && logging {
-		t.mStopLog.Show()
+		t.mStopLog.Enable()
 	} else {
-		t.mStopLog.Hide()
+		t.mStopLog.Disable()
 	}
 
 	t.renderSwitch()
@@ -813,7 +909,7 @@ func (t *tray) startScan() {
 	t.mScanning.Show()
 	t.mRescan.Disable()
 	go func() {
-		t.scanDone <- scanDevices(t.app.adapter, switchScanDuration)
+		t.scanDone <- t.app.scanDevices(switchScanDuration)
 	}()
 }
 
@@ -827,10 +923,23 @@ func (t *tray) loop() {
 			t.app.triggerRetry()
 			t.refresh()
 		case <-t.mStartLog.ClickedCh:
-			t.app.state.setLogging(true)
+			connected, logging, gaveUp := t.app.state.snapshot()
+			if connected && !logging && !gaveUp {
+				t.app.state.setLogging(true)
+			}
 			t.refresh()
 		case <-t.mStopLog.ClickedCh:
 			t.app.state.setLogging(false)
+			t.refresh()
+		case <-t.mAutoLog.ClickedCh:
+			if t.mAutoLog.Checked() {
+				t.mAutoLog.Uncheck()
+				t.app.setAutoLog(false)
+			} else {
+				t.mAutoLog.Check()
+				t.app.setAutoLog(true)
+				t.app.state.setLogging(true) // start now; also persists for next launch
+			}
 			t.refresh()
 		case <-t.mAutostart.ClickedCh:
 			if t.mAutostart.Checked() {
@@ -864,6 +973,12 @@ func (t *tray) loop() {
 		case <-t.mQuit.ClickedCh:
 			close(t.app.stop)
 			systray.Quit()
+			// Guarantee the process dies even if a dbus teardown stalls,
+			// so it can be relaunched cleanly.
+			go func() {
+				time.Sleep(2 * time.Second)
+				os.Exit(0)
+			}()
 			return
 		}
 	}
@@ -876,12 +991,6 @@ func main() {
 		log.Println("could not create logs directory:", err)
 	}
 
-	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
-		log.Println("failed to enable adapter:", err)
-		os.Exit(1)
-	}
-
 	cfg := loadConfig()
 	if cfg == nil {
 		cfg = &Config{}
@@ -890,7 +999,13 @@ func main() {
 		log.Printf("using device: %s", cfg.Current)
 	}
 
-	app := newApp(cfg, adapter)
+	app := newApp(cfg)
+
+	// Probe for an adapter, but don't fail if Bluetooth is currently off — the
+	// tray still launches and the worker keeps retrying once it comes back.
+	if _, err := app.ensureAdapter(); err != nil {
+		log.Println("bluetooth adapter not ready (will keep retrying):", err)
+	}
 
 	systray.Run(func() {
 		systray.SetIcon(imgDisconnected)
@@ -908,7 +1023,7 @@ func main() {
 			scanDone:   make(chan []KnownDevice, 1),
 		}
 
-		t.mSwitch = systray.AddMenuItem("Switch device", "")
+		t.mSwitch = systray.AddMenuItem("Devices", "")
 		for i := 0; i < maxSwitchSlots; i++ {
 			slot := t.mSwitch.AddSubMenuItem("", "")
 			slot.Hide()
@@ -925,13 +1040,12 @@ func main() {
 		t.mScanning.Hide()
 		t.mRescan = t.mSwitch.AddSubMenuItem("Rescan for new devices", "")
 
+		t.mAutoLog = systray.AddMenuItemCheckbox("Autostart HR log", "", app.snapshotConfig().AutoLog)
 		t.mAutostart = systray.AddMenuItemCheckbox("Start on boot", "", autostartEnabled())
 		t.mQuit = systray.AddMenuItem("Quit", "")
 
 		t.mRetry.Hide()
-		t.mStartLog.Hide()
-		t.mStopLog.Hide()
-		t.renderSwitch()
+		t.refresh()
 
 		go t.loop()
 		go app.runBLE()
