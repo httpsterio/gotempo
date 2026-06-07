@@ -64,16 +64,31 @@ var imgRunning []byte
 
 // ── paths ────────────────────────────────────────────────────────────────────
 
-func appDir() string {
-	exe, err := os.Executable()
+// configDir is the XDG config location: $XDG_CONFIG_HOME/gotempo or
+// ~/.config/gotempo.
+func configDir() string {
+	base, err := os.UserConfigDir()
 	if err != nil {
 		return "."
 	}
-	return filepath.Dir(exe)
+	return filepath.Join(base, "gotempo")
 }
 
-func configPath() string { return filepath.Join(appDir(), "config.json") }
-func logsDir() string    { return filepath.Join(appDir(), "logs") }
+// dataDir is the XDG data location: $XDG_DATA_HOME/gotempo or
+// ~/.local/share/gotempo.
+func dataDir() string {
+	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
+		return filepath.Join(x, "gotempo")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	return filepath.Join(home, ".local", "share", "gotempo")
+}
+
+func configPath() string { return filepath.Join(configDir(), "config.json") }
+func logsDir() string    { return dataDir() }
 func outputPath() string { return filepath.Join(logsDir(), "gotempo-bpm.txt") }
 
 func autostartPath() string {
@@ -949,8 +964,11 @@ func (t *tray) loop(autoScan bool) {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 func main() {
-	if err := os.MkdirAll(logsDir(), 0755); err != nil {
-		log.Println("could not create logs directory:", err)
+	if err := os.MkdirAll(configDir(), 0755); err != nil {
+		log.Println("could not create config directory:", err)
+	}
+	if err := os.MkdirAll(dataDir(), 0755); err != nil {
+		log.Println("could not create data directory:", err)
 	}
 
 	cfg := loadConfig()

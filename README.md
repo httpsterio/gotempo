@@ -33,7 +33,7 @@ cd gotempo-VERSION-linux-amd64
 
 Replace `VERSION` with the release tag (e.g. `v1.0.0`). `install.sh` copies the binary to `~/.local/bin/gotempo`, installs the icon and an app-menu entry, and refreshes the desktop caches — no sudo required. Make sure `~/.local/bin` is on your PATH. Run `./uninstall.sh` to remove everything.
 
-`config.json` and the `logs/` directory are created next to the binary (`~/.local/bin`).
+Config and data are stored under `~/.config/gotempo` and `~/.local/share/gotempo` (see [Files](#files)), so the binary can be moved freely without losing your saved device.
 
 ---
 
@@ -103,11 +103,11 @@ The app also survives the Bluetooth adapter being toggled off and on, including 
 
 ## Files
 
-All paths are relative to the binary:
+gotempo stores its data in standard XDG directories (created automatically on first run):
 
-- `config.json` — saved device, known-device history, and preferences. Managed by the app; see [Configuration](#configuration) if you need to edit it by hand.
-- `logs/gotempo-bpm.txt` — current BPM as a raw integer, overwritten on every change. Empty or absent when logging is not active.
-- `assets/` — tray status icons (`connected.png`, `disconnected.png`, `running.png`), embedded in the binary at build time, plus `logo.png` (512×512) used as the application icon by `make install`.
+- `~/.config/gotempo/config.json` — saved device, known-device history, and preferences. Managed by the app; see [Configuration](#configuration) if you need to edit it by hand. Honors `$XDG_CONFIG_HOME`.
+- `~/.local/share/gotempo/gotempo-bpm.txt` — current BPM as a raw integer, overwritten on every change. Empty or absent when logging is not active. Honors `$XDG_DATA_HOME`.
+- `assets/` (source tree only) — tray status icons (`connected.png`, `disconnected.png`, `running.png`), embedded in the binary at build time, plus `logo.png` (512×512) used as the application icon by `make install`.
 
 ---
 
