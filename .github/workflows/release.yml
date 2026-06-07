@@ -20,15 +20,12 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc libayatana-appindicator3-dev
-
       - name: Test
         run: go test ./...
 
       - name: Build
+        env:
+          CGO_ENABLED: "0"
         run: go build -ldflags "-w -s" -o gotempo .
 
       - name: Package tarball
