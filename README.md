@@ -1,10 +1,11 @@
 # gotempo
 
+![gotempo](assets/logo.png)
+
 A lightweight Linux system-tray app that connects to a Bluetooth LE heart-rate monitor, shows connection status as a tray icon, and writes the current BPM to a text file. Useful as an OBS text source or anywhere you want live BPM data in a file.
 
 Works with any BLE heart-rate monitor that uses the standard GATT HR profile (0x180D / 0x2A37) — Polar H10, Polar H9, and most other chest straps and optical armbands.
 
----
 
 ## Contents
 
@@ -18,7 +19,6 @@ Works with any BLE heart-rate monitor that uses the standard GATT HR profile (0x
 - [Configuration](#configuration)
 - [Planned](#planned)
 
----
 
 ## Install
 
@@ -35,7 +35,6 @@ Replace `VERSION` with the release tag (e.g. `v1.0.0`). `install.sh` copies the 
 
 Config and data are stored under `~/.config/gotempo` and `~/.local/share/gotempo` (see [Files](#files)), so the binary can be moved freely without losing your saved device.
 
----
 
 ## Requirements
 
@@ -43,7 +42,6 @@ Config and data are stored under `~/.config/gotempo` and `~/.local/share/gotempo
 - A StatusNotifierItem-capable system tray — XFCE, KDE, and most modern panels qualify. Without a tray host the app will not start.
 - `notify-send` (usually provided by `libnotify`) — optional, notifications are silently skipped if missing
 
----
 
 ## Build from source
 
@@ -63,7 +61,6 @@ make install     # make uninstall to remove
 
 Override the location with `PREFIX`, e.g. `sudo make install PREFIX=/usr/local`.
 
----
 
 ## First launch
 
@@ -73,7 +70,6 @@ Override the location with `PREFIX`, e.g. `sudo make install PREFIX=/usr/local`.
 
 On first launch with no `config.json`, the app starts scanning immediately. Open the **Devices** menu in the tray, wait for your monitor to appear (make sure it is awake and worn so it is advertising), and click it to connect. The choice is saved and subsequent launches connect directly without scanning.
 
----
 
 ## Tray menu
 
@@ -85,7 +81,6 @@ On first launch with no `config.json`, the app starts scanning immediately. Open
 | **Start on boot** | Adds or removes `~/.config/autostart/gotempo.desktop`. |
 | **Quit** | Exits the app. |
 
----
 
 ## Reconnection behaviour
 
@@ -99,7 +94,6 @@ If the device reconnects during the 60-second phase, a "reconnected" notificatio
 
 The app also survives the Bluetooth adapter being toggled off and on, including cases where it comes back on a different `hciN` index.
 
----
 
 ## Files
 
@@ -109,7 +103,6 @@ gotempo stores its data in standard XDG directories (created automatically on fi
 - `~/.local/share/gotempo/gotempo-bpm.txt` — current BPM as a raw integer, overwritten on every change. Empty or absent when logging is not active. Honors `$XDG_DATA_HOME`.
 - `assets/` (source tree only) — tray status icons (`connected.png`, `disconnected.png`, `running.png`), embedded in the binary at build time, plus `logo.png` (512×512) used as the application icon by `make install`.
 
----
 
 ## Configuration
 
@@ -131,7 +124,6 @@ gotempo stores its data in standard XDG directories (created automatically on fi
 
 Set `current` to your device MAC and add an entry to `known`. The app will connect to it on next launch without scanning.
 
----
 
 ## Planned
 
