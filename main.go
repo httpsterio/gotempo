@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"fyne.io/systray"
@@ -111,6 +112,27 @@ func autostartPath() string {
 		return ""
 	}
 	return filepath.Join(home, ".config", "autostart", "gotempo.desktop")
+}
+
+// acquireInstanceLock takes an exclusive, non-blocking lock so only one
+// gotempo runs at a time. The lock is held for the process lifetime and the
+// kernel releases it automatically on exit (even a crash), so there are no
+// stale locks. Returns ok=false if another instance already holds it. On ok,
+// the caller must keep the returned file open — closing it drops the lock.
+func acquireInstanceLock() (f *os.File, ok bool) {
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = configDir()
+	}
+	lf, err := os.OpenFile(filepath.Join(dir, "gotempo.lock"), os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, true // can't create a lock file — don't block startup
+	}
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lf.Close()
+		return nil, false
+	}
+	return lf, true
 }
 
 func autostartEnabled() bool {
@@ -1017,6 +1039,17 @@ func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Println("gotempo " + version)
 		return
+	}
+
+	// Single-instance guard: a second launch can't take the lock, so it exits
+	// instead of adding another tray icon.
+	lockFile, ok := acquireInstanceLock()
+	if !ok {
+		log.Println("gotempo is already running; exiting")
+		return
+	}
+	if lockFile != nil {
+		defer lockFile.Close()
 	}
 
 	if err := os.MkdirAll(configDir(), 0755); err != nil {
