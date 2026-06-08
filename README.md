@@ -68,7 +68,7 @@ Override the location with `PREFIX`, e.g. `sudo make install PREFIX=/usr/local`.
 ./gotempo
 ```
 
-On first launch with no `config.json`, the app starts scanning immediately. Open the **Devices** menu in the tray, wait for your monitor to appear (make sure it is awake and worn so it is advertising), and click it to connect. The choice is saved and subsequent launches connect directly without scanning.
+On first launch with no `config.json`, the app starts scanning immediately. Open the tray menu, wait for your monitor to appear in the device list (make sure it is awake and worn so it is advertising), and click it to connect. The choice is saved and subsequent launches connect directly without scanning.
 
 
 ## Tray menu
@@ -76,7 +76,8 @@ On first launch with no `config.json`, the app starts scanning immediately. Open
 | Item | Behaviour |
 |---|---|
 | **Start logging** / **Stop logging** | Begin or stop writing BPM to `logs/gotempo-bpm.txt`. Greyed out when not applicable. |
-| **Devices** | Lists known devices (most-recently-used first) plus any newly scanned ones. Click a device to switch to it. **Rescan for new devices** triggers a fresh 15-second scan. |
+| **Device list** | Known devices (most-recently-used first) plus any newly scanned ones are listed directly in the menu. Click a device to switch to it; the current device is marked and not clickable. Up to six are shown at once. |
+| **Rescan for new devices** | Triggers a fresh 15-second scan; newly found monitors appear in the list. |
 | **Autostart HR log** | When checked, logging starts automatically on every launch. |
 | **Start on boot** | Adds or removes `~/.config/autostart/gotempo.desktop`. |
 | **Quit** | Exits the app. |

@@ -28,7 +28,7 @@ const (
 	// forever at this interval.
 	indefiniteInterval = 60 * time.Second
 
-	maxSwitchSlots     = 8
+	maxSwitchSlots     = 6
 	switchScanDuration = 15 * time.Second
 )
 
@@ -743,13 +743,10 @@ type tray struct {
 	mAutostart *systray.MenuItem
 	mQuit      *systray.MenuItem
 
-	mSwitch     *systray.MenuItem
 	switchSlots []*systray.MenuItem
 	slotMACs    []string
 	slotNames   []string
-	mEmpty      *systray.MenuItem
-	mScanning   *systray.MenuItem
-	mRescan     *systray.MenuItem
+	mRescan     *systray.MenuItem // doubles as the scan-status row
 
 	slotClicks  chan int
 	scanDone    chan []KnownDevice
@@ -847,6 +844,12 @@ func (t *tray) refresh() {
 	t.renderSwitch()
 }
 
+// renderSwitch updates the device rows. They live in the top-level menu rather
+// than a nested submenu: XFCE's old libdbusmenu (the 18.10 build it still
+// ships) intermittently renders a nested submenu as an empty box, but top-level
+// items render reliably. Only slots backed by a real device (known or freshly
+// scanned) are shown; the rest are hidden, so the list tracks the actual device
+// count.
 func (t *tray) renderSwitch() {
 	cfg := t.app.snapshotConfig()
 	entries := buildEntries(cfg, t.lastScanned)
@@ -869,12 +872,6 @@ func (t *tray) renderSwitch() {
 			s.Hide()
 		}
 	}
-	// Show a placeholder when there's nothing to list and no scan in flight.
-	if len(entries) == 0 && !t.scanning {
-		t.mEmpty.Show()
-	} else {
-		t.mEmpty.Hide()
-	}
 }
 
 func (t *tray) startScan() {
@@ -882,17 +879,18 @@ func (t *tray) startScan() {
 		return
 	}
 	t.scanning = true
-	t.mScanning.Show()
-	t.renderSwitch() // hide the "no devices" placeholder while scanning
+	t.mRescan.SetTitle("Scanning…")
+	t.mRescan.Disable()
 	go func() {
 		t.scanDone <- t.app.scanDevices(switchScanDuration)
 	}()
 }
 
-// loop owns all tray UI mutation. autoScan kicks off a scan immediately, used
-// on startup when no device is configured yet.
+// loop owns all tray UI mutation. The caller builds the initial menu state via
+// refresh() *before* starting this goroutine, so the panel's first read is the
+// final layout. autoScan kicks off a scan immediately, used on startup when no
+// device is configured yet.
 func (t *tray) loop(autoScan bool) {
-	t.refresh()
 	if autoScan {
 		t.startScan()
 	}
@@ -944,7 +942,8 @@ func (t *tray) loop(autoScan bool) {
 			t.startScan()
 		case res := <-t.scanDone:
 			t.scanning = false
-			t.mScanning.Hide()
+			t.mRescan.SetTitle("Rescan for new devices")
+			t.mRescan.Enable()
 			t.lastScanned = res
 			t.renderSwitch()
 		case <-t.mQuit.ClickedCh:
@@ -1004,9 +1003,14 @@ func main() {
 			scanDone:   make(chan []KnownDevice, 1),
 		}
 
-		t.mSwitch = systray.AddMenuItem("Devices", "")
+		// Device selection lives directly in the top-level menu rather than a
+		// nested submenu: XFCE's old libdbusmenu intermittently renders a nested
+		// submenu as an empty box, while top-level items render reliably. The
+		// slots are pre-created here so they keep their position between the
+		// logging controls and the toggles, then shown/hidden as devices appear.
+		systray.AddSeparator()
 		for i := 0; i < maxSwitchSlots; i++ {
-			slot := t.mSwitch.AddSubMenuItem("", "")
+			slot := systray.AddMenuItem("", "")
 			slot.Hide()
 			t.switchSlots = append(t.switchSlots, slot)
 			idx := i
@@ -1016,19 +1020,19 @@ func main() {
 				}
 			}()
 		}
-		t.mEmpty = t.mSwitch.AddSubMenuItem("No devices found", "")
-		t.mEmpty.Disable()
-		t.mEmpty.Hide()
-		t.mScanning = t.mSwitch.AddSubMenuItem("Scanning…", "")
-		t.mScanning.Disable()
-		t.mScanning.Hide()
-		t.mRescan = t.mSwitch.AddSubMenuItem("Rescan for new devices", "")
+		t.mRescan = systray.AddMenuItem("Rescan for new devices", "")
+		systray.AddSeparator()
 
 		t.mAutoLog = systray.AddMenuItemCheckbox("Autostart HR log", "", app.snapshotConfig().AutoLog)
 		t.mAutostart = systray.AddMenuItemCheckbox("Start on boot", "", autostartEnabled())
 		t.mQuit = systray.AddMenuItem("Quit", "")
 
-		// loop owns all UI mutation; auto-scan on startup if no device is set.
+		// Build the initial device list before the panel reads the menu, so its
+		// first read is the final layout.
+		t.refresh()
+
+		// loop owns all subsequent UI mutation; auto-scan on startup if no
+		// device is set.
 		go t.loop(app.currentMAC() == "")
 		go app.runBLE()
 	}, func() {
