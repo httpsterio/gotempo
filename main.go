@@ -62,6 +62,15 @@ var imgConnected []byte
 //go:embed assets/running.png
 var imgRunning []byte
 
+// Per-row indicator for the device list: a green dot on the connected device,
+// and a transparent placeholder on the rest so the icon column stays aligned.
+//
+//go:embed assets/dot-connected.png
+var imgDotConnected []byte
+
+//go:embed assets/dot-none.png
+var imgDotNone []byte
+
 // version is injected at build time via -ldflags "-X main.version=…" (see the
 // Makefile, which derives it from `git describe`). It is "dev" for a plain
 // `go build` with no ldflags.
@@ -152,6 +161,33 @@ func disableAutostart() error {
 
 func notify(msg string) {
 	_ = exec.Command("notify-send", "gotempo", msg).Run()
+}
+
+// openLogFolder opens the log directory in a file browser. It prefers
+// xdg-open, but that fails when the system's inode/directory handler is
+// misconfigured (it exits non-zero after launching), so it falls back to
+// common file managers. xdg-open is run synchronously to observe its exit
+// code; the fallbacks are just launched. Call this from its own goroutine —
+// xdg-open can block briefly.
+func openLogFolder() {
+	dir := logsDir()
+	if err := exec.Command("xdg-open", dir).Run(); err == nil {
+		return
+	}
+	for _, fm := range []string{"exo-open", "thunar", "nautilus", "dolphin", "pcmanfm", "nemo", "caja", "gio"} {
+		path, err := exec.LookPath(fm)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, dir)
+		if fm == "gio" {
+			cmd = exec.Command(path, "open", dir)
+		}
+		if err := cmd.Start(); err == nil {
+			return
+		}
+	}
+	log.Printf("[logs] could not open %s: no working file-manager opener found", dir)
 }
 
 // describeConnectErr maps a raw BLE/BlueZ error into a short, human-readable
@@ -742,8 +778,8 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 type tray struct {
 	app *App
 
-	mStartLog  *systray.MenuItem
-	mStopLog   *systray.MenuItem
+	mLog       *systray.MenuItem // single Start/Stop logging toggle
+	mOpenLogs  *systray.MenuItem
 	mAutoLog   *systray.MenuItem
 	mAutostart *systray.MenuItem
 	mQuit      *systray.MenuItem
@@ -812,7 +848,7 @@ func slotLabel(e deviceEntry, current bool) string {
 	}
 	switch {
 	case current:
-		return "● " + name + " (current)"
+		return name + " (current)"
 	case !e.known:
 		return name + " — new"
 	case e.lastUsed == "":
@@ -834,16 +870,19 @@ func (t *tray) refresh() {
 		systray.SetIcon(imgConnected)
 	}
 
-	// Logging controls are always visible; greyed out when not actionable.
-	if connected && !logging {
-		t.mStartLog.Enable()
-	} else {
-		t.mStartLog.Disable()
-	}
-	if connected && logging {
-		t.mStopLog.Enable()
-	} else {
-		t.mStopLog.Disable()
+	// One toggle that reflects the current state: "Stop logging" while logging,
+	// otherwise "Start logging". Greyed out when there's no connection to log
+	// from (nothing to start or stop).
+	switch {
+	case connected && logging:
+		t.mLog.SetTitle("Stop logging")
+		t.mLog.Enable()
+	case connected:
+		t.mLog.SetTitle("Start logging")
+		t.mLog.Enable()
+	default:
+		t.mLog.SetTitle("Start logging")
+		t.mLog.Disable()
 	}
 
 	t.renderSwitch()
@@ -857,6 +896,7 @@ func (t *tray) refresh() {
 // count.
 func (t *tray) renderSwitch() {
 	cfg := t.app.snapshotConfig()
+	connected, _ := t.app.state.snapshot()
 	entries := buildEntries(cfg, t.lastScanned)
 	for i, s := range t.switchSlots {
 		if i < len(entries) {
@@ -867,6 +907,13 @@ func (t *tray) renderSwitch() {
 				s.Disable()
 			} else {
 				s.Enable()
+			}
+			// Green dot on the connected device (always the current one);
+			// a transparent placeholder on the rest keeps the icon column aligned.
+			if isCur && connected {
+				s.SetIcon(imgDotConnected)
+			} else {
+				s.SetIcon(imgDotNone)
 			}
 			t.slotMACs[i] = e.mac
 			t.slotNames[i] = e.name
@@ -903,15 +950,14 @@ func (t *tray) loop(autoScan bool) {
 		select {
 		case <-t.app.uiUpdates:
 			t.refresh()
-		case <-t.mStartLog.ClickedCh:
+		case <-t.mLog.ClickedCh:
 			connected, logging := t.app.state.snapshot()
-			if connected && !logging {
-				t.app.state.setLogging(true)
+			if connected {
+				t.app.state.setLogging(!logging)
 			}
 			t.refresh()
-		case <-t.mStopLog.ClickedCh:
-			t.app.state.setLogging(false)
-			t.refresh()
+		case <-t.mOpenLogs.ClickedCh:
+			go openLogFolder()
 		case <-t.mAutoLog.ClickedCh:
 			// Only sets the launch preference; does not change current logging.
 			if t.mAutoLog.Checked() {
@@ -1003,15 +1049,9 @@ func main() {
 		systray.SetTitle("gotempo") // stable SNI Id so the panel remembers the item
 		systray.SetTooltip("gotempo")
 
-		// Version banner (non-interactive), pinned at the top of the menu.
-		mVersion := systray.AddMenuItem("gotempo "+version, "")
-		mVersion.Disable()
-		systray.AddSeparator()
-
 		t := &tray{
 			app:        app,
-			mStartLog:  systray.AddMenuItem("Start logging", ""),
-			mStopLog:   systray.AddMenuItem("Stop logging", ""),
+			mLog:       systray.AddMenuItem("Start logging", ""),
 			slotMACs:   make([]string, maxSwitchSlots),
 			slotNames:  make([]string, maxSwitchSlots),
 			slotClicks: make(chan int),
@@ -1038,8 +1078,16 @@ func main() {
 		t.mRescan = systray.AddMenuItem("Rescan for new devices", "")
 		systray.AddSeparator()
 
+		t.mOpenLogs = systray.AddMenuItem("Open log folder", "")
 		t.mAutoLog = systray.AddMenuItemCheckbox("Autostart HR log", "", app.snapshotConfig().AutoLog)
 		t.mAutostart = systray.AddMenuItemCheckbox("Start on boot", "", autostartEnabled())
+
+		// Version banner (non-interactive), set off by separators above Quit.
+		systray.AddSeparator()
+		mVersion := systray.AddMenuItem("gotempo "+version, "")
+		mVersion.Disable()
+		systray.AddSeparator()
+
 		t.mQuit = systray.AddMenuItem("Quit", "")
 
 		// Build the initial device list before the panel reads the menu, so its

@@ -118,7 +118,7 @@ func TestBuildEntriesMergeAndCap(t *testing.T) {
 
 func TestSlotLabel(t *testing.T) {
 	cur := slotLabel(deviceEntry{mac: "M", name: "Foo", known: true}, true)
-	if cur != "● Foo (current)" {
+	if cur != "Foo (current)" {
 		t.Errorf("current label = %q", cur)
 	}
 	nw := slotLabel(deviceEntry{mac: "M", name: "Foo", known: false}, false)
