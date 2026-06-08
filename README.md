@@ -17,6 +17,7 @@ Works with any BLE heart-rate monitor that uses the standard GATT HR profile (0x
 - [Reconnection behaviour](#reconnection-behaviour)
 - [Files](#files)
 - [Configuration](#configuration)
+- [Releasing](#releasing)
 - [Planned](#planned)
 
 
@@ -52,6 +53,8 @@ go build -o gotempo .
 ```
 
 Requires Go 1.24+. The tray status icons are embedded in the binary at build time. BlueZ is a runtime dependency and cannot be bundled.
+
+The build stamps a version into the binary (shown as the first item in the tray menu, and printed by `gotempo --version`). A plain `go build` reports `dev`; build through `make` to get the git-derived version (see [Releasing](#releasing)).
 
 For desktop integration from a source build (app-menu entry + icon under `~/.local`, no sudo):
 
@@ -124,6 +127,37 @@ gotempo stores its data in standard XDG directories (created automatically on fi
 ```
 
 Set `current` to your device MAC and add an entry to `known`. The app will connect to it on next launch without scanning.
+
+
+## Releasing
+
+The version is derived from git tags — there is no version number to edit by hand. The tag you push *is* the version that ships.
+
+**Local builds** pick up the version automatically from `git describe`:
+
+```sh
+make install        # builds with the embedded version, installs under ~/.local
+gotempo --version   # prints e.g. "gotempo v1.0.1"
+```
+
+What the version looks like depends on where you are relative to tags:
+
+| Situation | Reported version |
+|---|---|
+| On a tagged commit | `v1.0.1` |
+| A few commits past the last tag | `v1.0.1-3-gabc123` |
+| Uncommitted local changes | `…-dirty` appended |
+| No tags yet | `dev` |
+
+So a local build is clearly marked as a work-in-progress, distinct from an official release.
+
+**Cutting a release** is one command:
+
+```sh
+make release VERSION=v1.0.2
+```
+
+It checks the version format, ensures the working tree is clean, runs the tests, creates an annotated tag, and pushes it. Pushing a `v*.*.*` tag triggers `.github/workflows/release.yml`, which builds the binary (stamped with the exact tag), packages the `linux-amd64` tarball with the installer, and publishes a GitHub release. Users who download that tarball get a binary that reports the clean tag version — no commit hash, no `-dirty`.
 
 
 ## Planned

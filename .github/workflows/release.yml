@@ -29,7 +29,7 @@ jobs:
       - name: Build
         env:
           CGO_ENABLED: "0"
-        run: go build -ldflags "-w -s" -o gotempo .
+        run: go build -ldflags "-w -s -X main.version=${GITHUB_REF_NAME}" -o gotempo .
 
       - name: Package tarball
         run: |

@@ -62,6 +62,11 @@ var imgConnected []byte
 //go:embed assets/running.png
 var imgRunning []byte
 
+// version is injected at build time via -ldflags "-X main.version=…" (see the
+// Makefile, which derives it from `git describe`). It is "dev" for a plain
+// `go build` with no ldflags.
+var version = "dev"
+
 // ── paths ────────────────────────────────────────────────────────────────────
 
 // configDir is the XDG config location: $XDG_CONFIG_HOME/gotempo or
@@ -963,6 +968,11 @@ func (t *tray) loop(autoScan bool) {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Println("gotempo " + version)
+		return
+	}
+
 	if err := os.MkdirAll(configDir(), 0755); err != nil {
 		log.Println("could not create config directory:", err)
 	}
@@ -992,6 +1002,11 @@ func main() {
 		systray.SetIcon(imgDisconnected)
 		systray.SetTitle("gotempo") // stable SNI Id so the panel remembers the item
 		systray.SetTooltip("gotempo")
+
+		// Version banner (non-interactive), pinned at the top of the menu.
+		mVersion := systray.AddMenuItem("gotempo "+version, "")
+		mVersion.Disable()
+		systray.AddSeparator()
 
 		t := &tray{
 			app:        app,
