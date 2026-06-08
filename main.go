@@ -26,8 +26,9 @@ const (
 	connectScanTimeout = 10 * time.Second
 
 	// After the finite (silent) schedule exhausts, reconnection continues
-	// forever at this interval.
-	indefiniteInterval = 60 * time.Second
+	// forever at this interval. Kept fairly short so a device that becomes
+	// reachable again is picked up promptly, without scanning continuously.
+	indefiniteInterval = 30 * time.Second
 
 	maxSwitchSlots     = 6
 	switchScanDuration = 15 * time.Second
@@ -389,13 +390,19 @@ func (a *App) findDevice(target string, d time.Duration) (*bluetooth.Adapter, bo
 	}
 
 	found := false
-	timer := time.AfterFunc(d, func() { _ = adapter.StopScan() })
+	// Both the timeout and a match stop the scan. The library's StopScan isn't
+	// safe to call concurrently (it closes an unsynchronized channel), so funnel
+	// both callers through a sync.Once to avoid a double-close panic if a match
+	// lands at the same moment the timeout fires.
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(func() { _ = adapter.StopScan() }) }
+	timer := time.AfterFunc(d, stop)
 	defer timer.Stop()
 
 	if err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
 		if strings.EqualFold(r.Address.MAC.String(), target) {
 			found = true
-			_ = adapter.StopScan()
+			stop()
 		}
 	}); err != nil {
 		log.Println("scan error:", err)
