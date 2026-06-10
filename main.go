@@ -728,35 +728,20 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 					return errStopped
 				case <-a.switchCh:
 					return errSwitched
-				case <-time.After(schedule[attempt-1]):
+				case <-time.After(schedule[attempt]):
 				}
 				continue
 			}
 			// Schedule exhausted; fall through to persistent phase.
 		}
 
-		// Persistent phase: scan continuously until the device appears,
-		// then connect and monitor. The loop restarts if the session drops.
+		// Persistent phase: scan continuously until the device reappears.
+		// persistentConnect only returns errStopped or errSwitched.
 		if !notifiedLoss {
 			notify("device lost")
 			notifiedLoss = true
 		}
-
-		err := a.persistentConnect(addr, notifiedLoss)
-		if errors.Is(err, errStopped) {
-			return errStopped
-		}
-		if errors.Is(err, errSwitched) {
-			return errSwitched
-		}
-
-		// Session dropped — back to continuous scanning.
-		if errors.Is(err, errSessionDropped) {
-			log.Println("[BLE] session ended; reconnecting")
-			notifiedLoss = false
-			a.state.onDisconnect()
-		}
-		a.signalUI()
+		return a.persistentConnect(addr, notifiedLoss)
 	}
 }
 
@@ -850,8 +835,11 @@ func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error 
 		if errors.Is(err, errStopped) || errors.Is(err, errSwitched) {
 			return err
 		}
-		// Session dropped or connection error — back to scanning.
+		// Session dropped or connect error — flip state, then rescan.
 		if errors.Is(err, errSessionDropped) {
+			log.Println("[BLE] session ended; reconnecting")
+			a.state.onDisconnect()
+			a.signalUI()
 			wasNotified = false
 		}
 	}
