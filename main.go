@@ -23,12 +23,17 @@ import (
 // ── constants ────────────────────────────────────────────────────────────────
 
 const (
-	connectScanTimeout = 10 * time.Second
+	connectScanTimeout = 20 * time.Second
 
 	// After the finite (silent) schedule exhausts, reconnection continues
 	// forever at this interval. Kept fairly short so a device that becomes
 	// reachable again is picked up promptly, without scanning continuously.
 	indefiniteInterval = 30 * time.Second
+
+	// After a healthy session drops, the file keeps the last BPM so a quick
+	// reconnect transitions smoothly. If the disconnect lasts longer the file
+	// is cleared so stale data isn't shown.
+	staleBPMTimeout = 10 * time.Second
 
 	maxSwitchSlots     = 6
 	switchScanDuration = 15 * time.Second
@@ -353,7 +358,9 @@ func (a *App) scanDevices(d time.Duration) []KnownDevice {
 	}
 
 	seen := map[string]KnownDevice{}
-	timer := time.AfterFunc(d, func() { _ = adapter.StopScan() })
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(func() { _ = adapter.StopScan() }) }
+	timer := time.AfterFunc(d, stop)
 	defer timer.Stop()
 
 	if err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
@@ -406,7 +413,7 @@ func (a *App) findDevice(target string, d time.Duration) (*bluetooth.Adapter, bo
 		}
 	}); err != nil {
 		log.Println("scan error:", err)
-		return adapter, false
+		return adapter, found
 	}
 	return adapter, found
 }
@@ -414,11 +421,12 @@ func (a *App) findDevice(target string, d time.Duration) (*bluetooth.Adapter, bo
 // ── shared state ─────────────────────────────────────────────────────────────
 
 type AppState struct {
-	mu        sync.Mutex
-	connected bool
-	logging   bool
-	lastBPM   int
-	hasBPM    bool
+	mu         sync.Mutex
+	connected  bool
+	logging    bool
+	lastBPM    int
+	hasBPM     bool
+	staleTimer *time.Timer
 }
 
 func (s *AppState) snapshot() (connected, logging bool) {
@@ -448,7 +456,40 @@ func (s *AppState) resetBPM() {
 func (s *AppState) onConnect() {
 	s.mu.Lock()
 	s.connected = true
+	if s.staleTimer != nil {
+		s.staleTimer.Stop()
+		s.staleTimer = nil
+	}
 	s.mu.Unlock()
+}
+
+func (s *AppState) onDisconnect() {
+	s.mu.Lock()
+	s.connected = false
+	if s.staleTimer != nil {
+		s.staleTimer.Stop()
+	}
+	s.staleTimer = time.AfterFunc(staleBPMTimeout, func() {
+		s.mu.Lock()
+		disconnected := !s.connected
+		s.mu.Unlock()
+		if disconnected {
+			os.WriteFile(outputPath(), []byte{}, 0644)
+		}
+	})
+	s.mu.Unlock()
+}
+
+func (s *AppState) onSwitch() {
+	s.mu.Lock()
+	s.connected = false
+	s.hasBPM = false
+	if s.staleTimer != nil {
+		s.staleTimer.Stop()
+		s.staleTimer = nil
+	}
+	s.mu.Unlock()
+	os.WriteFile(outputPath(), []byte{}, 0644)
 }
 
 // ── app ──────────────────────────────────────────────────────────────────────
@@ -557,8 +598,7 @@ func (a *App) switchTo(mac, name string) {
 		log.Printf("config save: %v", err)
 	}
 
-	a.state.setConnected(false)
-	a.state.resetBPM()
+	a.state.onSwitch()
 	a.signalSwitch()
 	a.signalUI()
 	log.Printf("[BLE] switching to %s (%s)", name, mac)
@@ -676,14 +716,14 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 		}
 
 		if errors.Is(err, errSessionDropped) {
-			// A real session was held and then lost — start the schedule over.
 			log.Println("[BLE] session ended; reconnecting")
 			attempt = 0
 			notifiedLoss = false
+			a.state.onDisconnect()
 		} else {
 			log.Printf("[BLE] connect failed: %s", describeConnectErr(err))
+			a.state.setConnected(false)
 		}
-		a.state.setConnected(false)
 		a.signalUI()
 
 		var interval time.Duration
