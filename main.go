@@ -23,12 +23,7 @@ import (
 // ── constants ────────────────────────────────────────────────────────────────
 
 const (
-	connectScanTimeout = 20 * time.Second
-
-	// After the finite (silent) schedule exhausts, reconnection continues
-	// forever at this interval. Kept fairly short so a device that becomes
-	// reachable again is picked up promptly, without scanning continuously.
-	indefiniteInterval = 30 * time.Second
+	connectScanTimeout = 10 * time.Second
 
 	// After a healthy session drops, the file keeps the last BPM so a quick
 	// reconnect transitions smoothly. If the disconnect lasts longer the file
@@ -689,10 +684,10 @@ func (a *App) runBLE() {
 // connectLoop runs the reconnection state machine for a single device address.
 // It retries silently through the finite schedule (5×3s, then 5×10s); a
 // reconnect during that phase is silent. When the finite schedule exhausts it
-// sends a single "device lost" notification and then retries forever at
-// indefiniteInterval. A reconnect during that phase notifies "reconnected" (via
-// connectOnce) and resets the schedule. It never gives up; it returns only
-// errStopped or errSwitched.
+// sends a single "device lost" notification and then scans continuously until
+// the device reappears. A reconnect during that phase notifies "reconnected"
+// (via connectAndMonitor) and resets the schedule. It never gives up; it returns
+// only errStopped or errSwitched.
 func (a *App) connectLoop(addr bluetooth.Address) error {
 	schedule := makeSchedule()
 	attempt := 0
@@ -707,7 +702,47 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 		default:
 		}
 
-		err := a.connectOnce(addr, notifiedLoss)
+		if attempt < len(schedule) {
+			err := a.connectOnce(addr, notifiedLoss)
+			if errors.Is(err, errStopped) {
+				return errStopped
+			}
+			if errors.Is(err, errSwitched) {
+				return errSwitched
+			}
+
+			if errors.Is(err, errSessionDropped) {
+				log.Println("[BLE] session ended; reconnecting")
+				attempt = 0
+				notifiedLoss = false
+				a.state.onDisconnect()
+			} else {
+				log.Printf("[BLE] connect failed: %s", describeConnectErr(err))
+				attempt++
+			}
+			a.signalUI()
+
+			if attempt < len(schedule) {
+				select {
+				case <-a.stop:
+					return errStopped
+				case <-a.switchCh:
+					return errSwitched
+				case <-time.After(schedule[attempt-1]):
+				}
+				continue
+			}
+			// Schedule exhausted; fall through to persistent phase.
+		}
+
+		// Persistent phase: scan continuously until the device appears,
+		// then connect and monitor. The loop restarts if the session drops.
+		if !notifiedLoss {
+			notify("device lost")
+			notifiedLoss = true
+		}
+
+		err := a.persistentConnect(addr, notifiedLoss)
 		if errors.Is(err, errStopped) {
 			return errStopped
 		}
@@ -715,45 +750,20 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 			return errSwitched
 		}
 
+		// Session dropped — back to continuous scanning.
 		if errors.Is(err, errSessionDropped) {
 			log.Println("[BLE] session ended; reconnecting")
-			attempt = 0
 			notifiedLoss = false
 			a.state.onDisconnect()
-		} else {
-			log.Printf("[BLE] connect failed: %s", describeConnectErr(err))
-			a.state.setConnected(false)
 		}
 		a.signalUI()
-
-		var interval time.Duration
-		if attempt < len(schedule) {
-			interval = schedule[attempt]
-			attempt++
-		} else {
-			if !notifiedLoss {
-				notify("device lost")
-				notifiedLoss = true
-			}
-			interval = indefiniteInterval
-		}
-
-		select {
-		case <-a.stop:
-			return errStopped
-		case <-a.switchCh:
-			return errSwitched
-		case <-time.After(interval):
-		}
 	}
 }
 
-// connectOnce attempts one connection and, on success, blocks until the session
-// ends. It always returns a sentinel error: errStopped, errSwitched,
-// errSessionDropped, or a raw connect/discovery error.
+// connectOnce scans for the device (with a timeout) then connects. Used during
+// the finite schedule phase. It returns errStopped, errSwitched, errSessionDropped,
+// or a raw connect/discovery error.
 func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
-	// Scan first so BlueZ has a fresh device object (and to pick up an adapter
-	// index change). This mirrors the proven find-then-connect flow.
 	log.Printf("[BLE] scanning for %s…", addr.MAC.String())
 	adapter, ok := a.findDevice(addr.MAC.String(), connectScanTimeout)
 	if adapter == nil {
@@ -762,7 +772,96 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 	if !ok {
 		return fmt.Errorf("device %s not found in scan", addr.MAC.String())
 	}
+	return a.connectAndMonitor(adapter, addr, wasNotified)
+}
 
+// persistScan blocks until the target device is seen in a continuous BLE scan
+// or the application is stopped/switched. BlueZ may stop the scan externally
+// (adapter power state change, etc.); when that happens the scan is restarted
+// after a brief pause.
+func (a *App) persistScan(target string) (*bluetooth.Adapter, error) {
+	a.scanMu.Lock()
+	defer a.scanMu.Unlock()
+
+	for {
+		select {
+		case <-a.stop:
+			return nil, errStopped
+		case <-a.switchCh:
+			return nil, errSwitched
+		default:
+		}
+
+		adapter, err := a.ensureAdapter()
+		if err != nil {
+			select {
+			case <-a.stop:
+				return nil, errStopped
+			case <-a.switchCh:
+				return nil, errSwitched
+			case <-time.After(1 * time.Second):
+			}
+			continue
+		}
+
+		found := false
+		var stopOnce sync.Once
+		stop := func() { stopOnce.Do(func() { _ = adapter.StopScan() }) }
+
+		if err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
+			if strings.EqualFold(r.Address.MAC.String(), target) {
+				found = true
+				stop()
+			}
+		}); err != nil {
+			// Scan may have been stopped externally (adapter off, etc.).
+			// If we found the device, the error came from StopScan itself — proceed.
+			if found {
+				return adapter, nil
+			}
+			select {
+			case <-a.stop:
+				return nil, errStopped
+			case <-a.switchCh:
+				return nil, errSwitched
+			case <-time.After(1 * time.Second):
+			}
+			continue
+		}
+
+		if found {
+			return adapter, nil
+		}
+	}
+}
+
+// persistentConnect runs a continuous scan for the device; when it appears,
+// connects and monitors the session. On session drop or connection failure it
+// returns to scanning immediately. It returns errStopped or errSwitched when
+// the application shuts down or switches devices.
+func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error {
+	for {
+		adapter, err := a.persistScan(addr.MAC.String())
+		if err != nil {
+			return err
+		}
+
+		err = a.connectAndMonitor(adapter, addr, wasNotified)
+		if errors.Is(err, errStopped) || errors.Is(err, errSwitched) {
+			return err
+		}
+		// Session dropped or connection error — back to scanning.
+		if errors.Is(err, errSessionDropped) {
+			wasNotified = false
+		}
+	}
+}
+
+// connectAndMonitor connects to a recently-scanned device, discovers the HR
+// service and characteristic, enables notifications, and blocks until the
+// session ends or the app stops/switches. It always returns a sentinel error:
+// errStopped, errSwitched, errSessionDropped, or a raw connect/discovery error.
+func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Address, wasNotified bool) error {
 	log.Printf("[BLE] connecting to %s…", addr.MAC.String())
 	device, err := adapter.Connect(addr, bluetooth.ConnectionParams{})
 	if err != nil {
