@@ -760,14 +760,10 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 	return a.connectAndMonitor(adapter, addr, wasNotified)
 }
 
-// persistScan blocks until the target device is seen in a continuous BLE scan
-// or the application is stopped/switched. BlueZ may stop the scan externally
-// (adapter power state change, etc.); when that happens the scan is restarted
-// after a brief pause.
+// persistScan repeatedly scans (one bounded round at a time) until the target
+// device is seen or the app is stopped/switched. Holding scanMu only per round
+// lets the tray's own scans (Rescan) interleave instead of blocking.
 func (a *App) persistScan(target string) (*bluetooth.Adapter, error) {
-	a.scanMu.Lock()
-	defer a.scanMu.Unlock()
-
 	for {
 		select {
 		case <-a.stop:
@@ -777,45 +773,16 @@ func (a *App) persistScan(target string) (*bluetooth.Adapter, error) {
 		default:
 		}
 
-		adapter, err := a.ensureAdapter()
-		if err != nil {
-			select {
-			case <-a.stop:
-				return nil, errStopped
-			case <-a.switchCh:
-				return nil, errSwitched
-			case <-time.After(1 * time.Second):
-			}
-			continue
-		}
-
-		found := false
-		var stopOnce sync.Once
-		stop := func() { stopOnce.Do(func() { _ = adapter.StopScan() }) }
-
-		if err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
-			if strings.EqualFold(r.Address.MAC.String(), target) {
-				found = true
-				stop()
-			}
-		}); err != nil {
-			// Scan may have been stopped externally (adapter off, etc.).
-			// If we found the device, the error came from StopScan itself — proceed.
-			if found {
-				return adapter, nil
-			}
-			select {
-			case <-a.stop:
-				return nil, errStopped
-			case <-a.switchCh:
-				return nil, errSwitched
-			case <-time.After(1 * time.Second):
-			}
-			continue
-		}
-
-		if found {
+		if adapter, found := a.findDevice(target, connectScanTimeout); found {
 			return adapter, nil
+		}
+
+		select {
+		case <-a.stop:
+			return nil, errStopped
+		case <-a.switchCh:
+			return nil, errSwitched
+		case <-time.After(1 * time.Second):
 		}
 	}
 }
