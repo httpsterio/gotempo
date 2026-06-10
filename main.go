@@ -466,10 +466,13 @@ func (s *AppState) onDisconnect() {
 	}
 	s.staleTimer = time.AfterFunc(staleBPMTimeout, func() {
 		s.mu.Lock()
-		disconnected := !s.connected
-		s.mu.Unlock()
-		if disconnected {
-			os.WriteFile(outputPath(), []byte{}, 0644)
+		defer s.mu.Unlock()
+		if s.connected {
+			return
+		}
+		s.hasBPM = false
+		if err := os.WriteFile(outputPath(), []byte{}, 0644); err != nil {
+			log.Printf("[BPM] could not clear output: %v", err)
 		}
 	})
 	s.mu.Unlock()
