@@ -49,6 +49,37 @@ Progression seen in the log during the failure:
 3. After `bluetoothctl remove`, the next connect hung inside the connect call for
    ~3 min with no log line (waiting on pairing).
 
+### Working state after the repair (2026-06-11/12)
+The day after the `remove`+`pair`+`trust` recovery, the strap reconnected cleanly
+every time: 11 connects over ~10h, including after 2h+ gaps, all ~16s with no
+`not found in scan` and no `service discovery timed out`. The only thing that
+changed from the failing state was the device's BlueZ state:
+- the `remove` wiped the bond and **GATT cache** (rebuilt fresh on re-pair);
+- `Trusted` went from `no` to `yes` (enables BlueZ background auto-reconnect).
+Same gotempo build, same strap, same phone. So the difference is entirely
+BlueZ-side, consistent with the bad state living in BlueZ.
+
+Caveat: this is **not** proof of a fix. The repair reset the clock — a fresh
+cache behaving well is expected whether or not the bug is gone. Also, those long
+gaps were the strap **off/cold** then put back on, not the failing condition
+(bonded + powered + idle ~1h). The exact failing condition has not been
+re-challenged since the repair.
+
+### Repro attempts (what does NOT trigger it)
+- **Test 1 — off-idle, 2026-06-12.** From the fresh trusted bond: strap worn and
+  connected, then taken off (powers down), gotempo left running, strap off ~1.5h
+  (01:24 -> 02:52), then put back on. Reconnected clean in ~17s, BPM streaming,
+  **zero** `service discovery timed out`; the only failures during the idle
+  window were benign `not found in scan` (strap off, nothing to find). So the
+  trigger is **not** "strap off for ~1h". The faithful real-world off-then-on
+  path is reliable on a fresh bond.
+- Still untested: idle while the strap stays **powered + bonded** (worn or pads
+  bridged, gotempo not holding the link); a **suspend/resume** cycle during the
+  idle window (top remaining suspect — "didn't use it for an hour" often means
+  the laptop slept); long-term **bond age** (original failures built up over
+  days; the repair reset the clock); **trusted vs untrusted** (original failures
+  may have been while untrusted).
+
 ### Likely cause (NOT confirmed)
 Stale BlueZ **GATT cache** for the bonded device. BlueZ caches the device's
 attribute table; when it goes stale after a long disconnect, service discovery
@@ -79,6 +110,36 @@ untested.
   and `sudo systemctl restart bluetooth`. If that alone fixes it without a re-pair,
   the cause is the stale cache.
 
+### Reproducing it on purpose (not yet confirmed to trigger)
+The failing condition is the strap **powered + bonded + idle** for ~1h, not a
+cold strap that was off. The H10 powers off when taken off (it needs skin
+contact), so to age it while idle without wearing it, bridge the two electrode
+pads with a damp cloth and a pinch of salt; that keeps it powered on the desk.
+
+Controlled aging test:
+1. Start from a fresh bond (post-`remove`+`pair` state).
+2. Keep the strap powered but idle: bridge the pads (or wear it), let gotempo
+   connect, then **quit gotempo** so nothing holds the link. The strap now sits
+   bonded to BlueZ with no active connection.
+3. Leave it 1-2h powered + bonded + idle.
+4. Restart gotempo and watch the log. `service discovery timed out` / flapping
+   confirms the trigger is time-idle-while-bonded.
+
+Isolate one variable at a time across runs:
+- **Suspend:** repeat but `systemctl suspend` for the idle window, resume,
+  restart gotempo. If it only breaks with a suspend in the window, the trigger is
+  resume-time controller/cache corruption, not wall-clock idle. Top suspect.
+  (Check correlation with `journalctl -g suspend`.)
+- **Trusted vs untrusted:** `bluetoothctl untrust` for one run. If untrusted
+  reproduces and trusted does not, BlueZ background auto-reconnect (trusted only)
+  is keeping the cache warm.
+- **Phone present/absent:** believed irrelevant; one run to confirm.
+
+Do the logging improvement (PLAN.md) first. The persistent phase is silent for
+~50min stretches now, so a failure leaves no trace of what it tried. Per-round
+logging plus the surfaced connect/discovery error makes the next failure
+self-explanatory.
+
 ### Fix direction
 
 Do NOT ship a system-config change. The targeted root-cause tweak is
@@ -104,6 +165,28 @@ Implementation notes:
   timeouts), not eager use. Consider a config toggle.
 - Caveat: headless re-pair needs a pairing agent present (blueman/GNOME provide
   one). On a bare setup with no agent it may prompt or fail.
+
+**Rejected: clearing the GATT cache on a timer.** Considered and dropped:
+- The clean clears need root. The cache file
+  (`/var/lib/bluetooth/<adapter>/cache/<dev>`, mode 0700) and `main.conf`'s
+  `[GATT] Cache = no` are both root-only. gotempo runs as the user, so neither is
+  available without elevation we agreed not to ship.
+- The no-root path is `RemoveDevice` over DBus, but that drops the **bond**, not
+  just the cache, forcing a re-pair. On a timer that means unpairing/re-pairing a
+  working device every cycle: a disconnect window each time, re-pair latency, and
+  outright failure if no agent is up at that moment.
+- BlueZ exposes **no** DBus method to invalidate the cache and rediscover on a
+  live device, so there is no cheap per-device refresh to call periodically.
+So detection-triggered self-heal (above) is strictly better than timer clearing:
+it acts only when actually stuck, with no needless re-pairs.
+
+**Lighter preventive to try first (no root, no re-pair):** on idle/drop, have
+gotempo issue a clean `Device1.Disconnect` over DBus so BlueZ tears the link down
+in a known state instead of letting it rot into a discovery timeout. Unproven but
+low-risk; worth trying before the heavier self-heal.
+
+Suggested sequence: logging first -> run the aging test to confirm the trigger
+-> clean-Disconnect-on-idle -> detection-triggered self-heal if still needed.
 
 ### Related code (main.go, line numbers approximate)
 - **Scan-gate** (root of "not found in scan"): `connectOnce` requires `findDevice`
