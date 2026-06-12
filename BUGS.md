@@ -73,12 +73,23 @@ re-challenged since the repair.
   window were benign `not found in scan` (strap off, nothing to find). So the
   trigger is **not** "strap off for ~1h". The faithful real-world off-then-on
   path is reliable on a fresh bond.
+- **Test 2 — suspend, 2026-06-12.** Strap off, gotempo running, laptop in deep
+  suspend 14:12:13 -> 15:25:31 (1h13m, confirmed in journal `PM: suspend
+  entry/exit`), plus several shorter suspends the night before. On resume the
+  strap reconnected ~28s later (15:25:59), zero `service discovery timed out`.
+  So a suspend/resume cycle does **not** trigger it either.
 - Still untested: idle while the strap stays **powered + bonded** (worn or pads
-  bridged, gotempo not holding the link); a **suspend/resume** cycle during the
-  idle window (top remaining suspect — "didn't use it for an hour" often means
-  the laptop slept); long-term **bond age** (original failures built up over
-  days; the repair reset the clock); **trusted vs untrusted** (original failures
-  may have been while untrusted).
+  bridged, gotempo not holding the link); long-term **bond age** (original
+  failures built up over days; the repair reset the clock); **trusted vs
+  untrusted** (original failures may have been while untrusted).
+
+So far nothing deliberate reproduces it on the fresh trusted bond: off-idle 1.5h,
+deep suspend 1h+, shorter suspends, and ~2 days of normal use are all clean. The
+strongest remaining hypothesis is slow **bond/cache aging** (or the trusted
+flag), neither of which can be forced quickly. Practical path: keep using it
+normally and capture the log the moment it fails again (before removing the
+device) — which makes the logging improvement (PLAN.md) the priority, so the next
+organic failure is self-diagnosing.
 
 ### Likely cause (NOT confirmed)
 Stale BlueZ **GATT cache** for the bonded device. BlueZ caches the device's
