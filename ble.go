@@ -88,7 +88,8 @@ func describeConnectErr(err error) string {
 // ── app ──────────────────────────────────────────────────────────────────────
 
 type App struct {
-	state *AppState
+	state   *AppState
+	session *SessionLogger
 
 	adapterMu sync.Mutex
 	adapter   *bluetooth.Adapter // current adapter; may be re-resolved if it disappears
@@ -106,10 +107,38 @@ type App struct {
 func newApp(cfg *Config) *App {
 	return &App{
 		state:     &AppState{logging: cfg.AutoLog}, // autostart logging if enabled
+		session:   newSessionLogger(sessionsDir(), cfg.sessionGap(), cfg.minBPM()),
 		cfg:       cfg,
 		uiUpdates: make(chan struct{}, 1),
 		stop:      make(chan struct{}),
 		switchCh:  make(chan struct{}, 1),
+	}
+}
+
+// setLogging toggles BPM logging. Turning it off closes the CSV session handle;
+// turning it on lets the next valid reading open or resume a session per the
+// gap rule. The OBS overlay file is handled separately in handleBPM.
+func (a *App) setLogging(v bool) {
+	a.state.setLogging(v)
+	if !v {
+		a.session.Close()
+	}
+}
+
+// gapCheckLoop closes an idle CSV session even when no readings arrive at all
+// (a dead connection), so it does not linger open until the next reading. Every
+// write already flushes, so this is cosmetic: it frees the handle and forces a
+// clean new file when readings resume.
+func (a *App) gapCheckLoop() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.stop:
+			return
+		case now := <-ticker.C:
+			a.session.checkGap(now)
+		}
 	}
 }
 
@@ -209,10 +238,21 @@ func (a *App) markConnected(mac string) {
 
 func (a *App) handleBPM(bpm int) {
 	a.state.mu.Lock()
-	if !a.state.logging {
-		a.state.mu.Unlock()
+	logging := a.state.logging
+	a.state.mu.Unlock()
+	if !logging {
 		return
 	}
+
+	// CSV session log: every valid reading at full cadence (no dedup), so the
+	// file keeps a row per second. Junk is filtered inside LogReading.
+	if err := a.session.LogReading(time.Now(), bpm); err != nil {
+		log.Printf("[CSV] %v", err)
+	}
+
+	// OBS overlay file: deduped to the last distinct value, with its own
+	// stale-hold/clear lifecycle (onDisconnect/onSwitch). Independent of CSV.
+	a.state.mu.Lock()
 	if a.state.hasBPM && a.state.lastBPM == bpm {
 		a.state.mu.Unlock()
 		return

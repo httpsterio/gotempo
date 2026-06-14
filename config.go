@@ -34,10 +34,42 @@ type Config struct {
 	Current string        `json:"current"`
 	Known   []KnownDevice `json:"known"`
 	AutoLog bool          `json:"auto_log,omitempty"` // start logging automatically on launch
+
+	SessionGapMinutes int `json:"session_gap_minutes,omitempty"` // gap that ends a CSV session
+	MinBPMThreshold   int `json:"min_bpm_threshold,omitempty"`   // readings below this are junk
+}
+
+// Defaults for the CSV session logger, applied when the config value is unset
+// (zero) so a hand-edited config only needs the keys it wants to override.
+const (
+	defaultSessionGapMinutes = 60
+	defaultMinBPMThreshold   = 20
+)
+
+// sessionGap is the idle span that ends a session, as a duration.
+func (c Config) sessionGap() time.Duration {
+	m := c.SessionGapMinutes
+	if m <= 0 {
+		m = defaultSessionGapMinutes
+	}
+	return time.Duration(m) * time.Minute
+}
+
+// minBPM is the validity floor; readings below it are ignored by the CSV log.
+func (c Config) minBPM() int {
+	if c.MinBPMThreshold <= 0 {
+		return defaultMinBPMThreshold
+	}
+	return c.MinBPMThreshold
 }
 
 func (c Config) clone() Config {
-	out := Config{Current: c.Current, AutoLog: c.AutoLog}
+	out := Config{
+		Current:           c.Current,
+		AutoLog:           c.AutoLog,
+		SessionGapMinutes: c.SessionGapMinutes,
+		MinBPMThreshold:   c.MinBPMThreshold,
+	}
 	out.Known = append([]KnownDevice(nil), c.Known...)
 	return out
 }
@@ -82,16 +114,24 @@ func (c Config) sortedKnown() []KnownDevice {
 // Returns nil if the data is unusable (unparseable or no current device).
 func parseConfig(data []byte) *Config {
 	var raw struct {
-		Current string        `json:"current"`
-		Known   []KnownDevice `json:"known"`
-		AutoLog bool          `json:"auto_log"`
-		MAC     string        `json:"mac"`  // legacy
-		Name    string        `json:"name"` // legacy
+		Current           string        `json:"current"`
+		Known             []KnownDevice `json:"known"`
+		AutoLog           bool          `json:"auto_log"`
+		SessionGapMinutes int           `json:"session_gap_minutes"`
+		MinBPMThreshold   int           `json:"min_bpm_threshold"`
+		MAC               string        `json:"mac"`  // legacy
+		Name              string        `json:"name"` // legacy
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil
 	}
-	cfg := &Config{Current: raw.Current, Known: raw.Known, AutoLog: raw.AutoLog}
+	cfg := &Config{
+		Current:           raw.Current,
+		Known:             raw.Known,
+		AutoLog:           raw.AutoLog,
+		SessionGapMinutes: raw.SessionGapMinutes,
+		MinBPMThreshold:   raw.MinBPMThreshold,
+	}
 	// Migrate legacy {mac, name} schema.
 	if cfg.Current == "" && raw.MAC != "" {
 		cfg.Current = raw.MAC

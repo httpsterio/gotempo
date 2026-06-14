@@ -104,7 +104,9 @@ func main() {
 		// device is set.
 		go t.loop(app.currentMAC() == "")
 		go app.runBLE()
+		go app.gapCheckLoop()
 	}, func() {
 		// onExit
+		app.session.Close()
 	})
 }

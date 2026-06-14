@@ -188,7 +188,7 @@ func (t *tray) loop(autoScan bool) {
 		case <-t.mLog.ClickedCh:
 			connected, logging := t.app.state.snapshot()
 			if connected {
-				t.app.state.setLogging(!logging)
+				t.app.setLogging(!logging)
 			}
 			t.refresh()
 		case <-t.mOpenLogs.ClickedCh:
