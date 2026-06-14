@@ -29,7 +29,7 @@ jobs:
       - name: Build
         env:
           CGO_ENABLED: "0"
-        run: go build -ldflags "-w -s -X main.version=${GITHUB_REF_NAME}" -o gotempo .
+        run: go build -ldflags "-w -s -X gotempo/internal/app.version=${GITHUB_REF_NAME}" -o gotempo .
 
       - name: Package tarball
         run: |
@@ -37,7 +37,7 @@ jobs:
           DIST="gotempo-${TAG}-linux-amd64"
           mkdir -p "$DIST/assets"
           cp gotempo scripts/install.sh scripts/uninstall.sh "$DIST/"
-          cp assets/logo.png "$DIST/assets/"
+          cp internal/app/assets/logo.png "$DIST/assets/"
           chmod +x "$DIST/install.sh" "$DIST/uninstall.sh"
           tar -czf "${DIST}.tar.gz" "$DIST"
           echo "ASSET=${DIST}.tar.gz" >> "$GITHUB_ENV"

@@ -24,24 +24,32 @@ Override the location with `PREFIX`, e.g. `sudo make install PREFIX=/usr/local`.
 
 ## Code layout
 
-All one `package main`, split by concern:
+`main.go` in the repo root is a shim (`func main() { app.Run() }`); all the code
+lives in one `internal/app` package, split by concern:
 
-| File | Holds |
+| File (`internal/app/`) | Holds |
 |---|---|
-| `main.go` | startup, tray wiring |
-| `assets.go` | embedded icons, build-stamped `version` |
+| `run.go` | startup, tray wiring (the old `main`, now `Run`) |
+| `assets.go` | embedded icons (`assets/`), build-stamped `version` |
 | `config.go` | config load/save, `configDir` (portable) |
 | `state.go` | `AppState` and the BPM-file lifecycle |
 | `ble.go` | scanning, the connect/reconnect state machine, constants |
+| `session.go` | per-session CSV logging |
 | `tray.go` | tray menu and rendering |
+
+It is one package, not several, so the files share unexported identifiers
+freely; the split is for readability, and the `internal/` location just keeps the
+repo root clean. `version` is stamped via `-ldflags "-X
+gotempo/internal/app.version=…"` (the Makefile path matters; see Releasing).
 
 Platform-specific code sits behind a contract so the shared files never branch
 on the OS. The contract is `dataDir`, `notify`, `openLogFolder`, the autostart
 trio, `openAdapter`, and `acquireInstanceLock`. Linux implements it in
 `platform_linux.go` and `lock_unix.go` (flock; the `unix` build tag also covers
-macOS). Go picks the right file by its `_linux` / `_darwin` / `_windows` suffix.
-Adding an OS means writing one `platform_<os>.go` (plus `lock_windows.go` for
-Windows) against that contract, touching no shared files.
+macOS). Go picks the right file by its `_linux` / `_darwin` / `_windows` suffix,
+within the `internal/app` package. Adding an OS means writing one
+`platform_<os>.go` (plus `lock_windows.go` for Windows) against that contract,
+touching no shared files.
 
 ## Releasing
 

@@ -1,6 +1,6 @@
 # gotempo
 
-![gotempo](assets/logo.png)
+![gotempo](internal/app/assets/logo.png)
 
 A small Linux tray app that connects to a Bluetooth LE heart-rate monitor, shows connection status in the tray, and writes the current BPM to a text file. Useful as an OBS text source.
 
@@ -87,7 +87,7 @@ gotempo uses standard XDG directories, created on first run:
 - `~/.config/gotempo/config.json`: saved device, known-device history, and preferences. Managed by the app; see [Configuration](#configuration) to edit it by hand. Honors `$XDG_CONFIG_HOME`.
 - `~/.local/share/gotempo/gotempo-bpm.txt`: current BPM as a raw integer, rewritten on each change. Empty when not logging. Keeps the last reading briefly across a short dropout, then clears after about ten seconds disconnected. Honors `$XDG_DATA_HOME`.
 - `~/.local/share/gotempo/sessions/*.csv`: per-session history, one `timestamp,bpm` row per reading. Written while logging is on. A new file starts after a gap longer than `session_gap_minutes`; shorter breaks append to the current file. Readings below `min_bpm_threshold` (sensor off / no contact) are skipped, so they show as gaps in the timestamps rather than junk rows. Files are named by the session's first reading.
-- `assets/` (source tree only): tray status icons and `logo.png`, embedded in the binary at build time.
+- `internal/app/assets/` (source tree only): tray status icons and `logo.png`, embedded in the binary at build time.
 
 
 ## Configuration

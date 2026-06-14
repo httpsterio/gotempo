@@ -16,12 +16,12 @@ ICONDIR := $(DATADIR)/icons/hicolor/512x512/apps
 
 BIN := gotempo
 
-ICON_SRC := assets/logo.png
+ICON_SRC := internal/app/assets/logo.png
 
 # Version is derived from git tags (e.g. v1.2.3, or v1.2.3-4-gabc123-dirty
 # between tags) and baked into the binary. Falls back to "dev" with no tags.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X main.version=$(VERSION)
+LDFLAGS := -X gotempo/internal/app.version=$(VERSION)
 
 # The .desktop entry is fully static, so it is generated at install time rather
 # than kept as a file in the tree. scripts/install.sh carries the same content

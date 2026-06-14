@@ -1,4 +1,4 @@
-package main
+package app
 
 import _ "embed"
 
@@ -20,7 +20,7 @@ var imgDotConnected []byte
 //go:embed assets/dot-none.png
 var imgDotNone []byte
 
-// version is injected at build time via -ldflags "-X main.version=…" (see the
+// version is injected at build time via -ldflags "-X gotempo/internal/app.version=…" (see the
 // Makefile, which derives it from `git describe`). It is "dev" for a plain
 // `go build` with no ldflags.
 var version = "dev"
