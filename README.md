@@ -60,7 +60,7 @@ On first connect, accept the pairing prompt if it appears. Most straps allow one
 
 | Item | Behaviour |
 |---|---|
-| **Start logging** / **Stop logging** | Begin or stop writing BPM to `logs/gotempo-bpm.txt`. Greyed out when not applicable. |
+| **Start logging** / **Stop logging** | Begin or stop logging: writes the current BPM to `gotempo-bpm.txt` and appends each reading to a per-session CSV (see [Files](#files)). Greyed out when not applicable. |
 | **Device list** | Known devices (most-recently-used first) plus newly scanned ones, listed directly in the menu. Click one to switch; the current device is marked and not clickable. Up to six shown. |
 | **Rescan for new devices** | Runs a fresh 15-second scan; new monitors appear in the list. |
 | **Autostart HR log** | When checked, logging starts automatically on launch. |
