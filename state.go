@@ -34,12 +34,6 @@ func (s *AppState) setLogging(v bool) {
 	s.mu.Unlock()
 }
 
-func (s *AppState) resetBPM() {
-	s.mu.Lock()
-	s.hasBPM = false
-	s.mu.Unlock()
-}
-
 func (s *AppState) onConnect() {
 	s.mu.Lock()
 	s.connected = true
@@ -79,5 +73,7 @@ func (s *AppState) onSwitch() {
 		s.staleTimer = nil
 	}
 	s.mu.Unlock()
-	os.WriteFile(outputPath(), []byte{}, 0644)
+	if err := os.WriteFile(outputPath(), []byte{}, 0644); err != nil {
+		log.Printf("[BPM] could not clear output: %v", err)
+	}
 }

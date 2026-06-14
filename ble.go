@@ -25,6 +25,10 @@ const (
 
 	maxSwitchSlots     = 6
 	switchScanDuration = 15 * time.Second
+
+	// In the persistent phase, log a heartbeat at most this often so a long
+	// wait leaves a trace without flooding the log.
+	persistScanLogInterval = 60 * time.Second
 )
 
 // retrySchedule is the finite, silent reconnection phase: 5×3s then 5×10s.
@@ -252,7 +256,7 @@ func (a *App) scanDevices(d time.Duration) []KnownDevice {
 		}
 		seen[mac] = KnownDevice{MAC: mac, Name: r.LocalName()}
 	}); err != nil {
-		log.Println("scan error:", err)
+		log.Println("[BLE] scan error:", err)
 	}
 
 	out := make([]KnownDevice, 0, len(seen))
@@ -291,7 +295,7 @@ func (a *App) findDevice(target string, d time.Duration) (*bluetooth.Adapter, bo
 			stop()
 		}
 	}); err != nil {
-		log.Println("scan error:", err)
+		log.Println("[BLE] scan error:", err)
 		return adapter, found
 	}
 	return adapter, found
@@ -332,7 +336,7 @@ func (a *App) runBLE() {
 		}
 		parsed, err := bluetooth.ParseMAC(mac)
 		if err != nil {
-			log.Println("invalid mac:", err)
+			log.Println("[BLE] invalid mac:", err)
 			select {
 			case <-a.stop:
 				return
@@ -380,7 +384,7 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 			}
 
 			if errors.Is(err, errSessionDropped) {
-				log.Println("[BLE] session ended; reconnecting")
+				// connectAndMonitor logs the session length on drop.
 				attempt = 0
 				notifiedLoss = false
 				a.state.onDisconnect()
@@ -432,6 +436,8 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 // device is seen or the app is stopped/switched. Holding scanMu only per round
 // lets the tray's own scans (Rescan) interleave instead of blocking.
 func (a *App) persistScan(target string) (*bluetooth.Adapter, error) {
+	start := time.Now()
+	var lastLog time.Time // zero value forces a log on the first round
 	for {
 		select {
 		case <-a.stop:
@@ -441,7 +447,13 @@ func (a *App) persistScan(target string) (*bluetooth.Adapter, error) {
 		default:
 		}
 
+		if time.Since(lastLog) >= persistScanLogInterval {
+			log.Printf("[BLE] still scanning for %s (%s elapsed)", target, time.Since(start).Round(time.Second))
+			lastLog = time.Now()
+		}
+
 		if adapter, found := a.findDevice(target, connectScanTimeout); found {
+			log.Printf("[BLE] %s back in range after %s", target, time.Since(start).Round(time.Second))
 			return adapter, nil
 		}
 
@@ -470,12 +482,15 @@ func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error 
 		if errors.Is(err, errStopped) || errors.Is(err, errSwitched) {
 			return err
 		}
-		// Session dropped or connect error — flip state, then rescan.
 		if errors.Is(err, errSessionDropped) {
-			log.Println("[BLE] session ended; reconnecting")
+			// connectAndMonitor logs the session length on drop; flip state.
 			a.state.onDisconnect()
 			a.signalUI()
 			wasNotified = false
+		} else if err != nil {
+			// A connect/discovery error here was previously swallowed, leaving
+			// the persistent phase silent. Surface it before rescanning.
+			log.Printf("[BLE] connect failed: %s", describeConnectErr(err))
 		}
 	}
 }
@@ -532,6 +547,7 @@ func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Addre
 	}
 
 	log.Println("[BLE] connected")
+	connectedAt := time.Now()
 	a.state.onConnect()
 	a.markConnected(addr.MAC.String())
 	if wasNotified {
@@ -558,6 +574,7 @@ func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Addre
 			connected, err := device.Connected()
 			if err != nil || !connected {
 				cleanup()
+				log.Printf("[BLE] session ended after %s; reconnecting", time.Since(connectedAt).Round(time.Second))
 				return errSessionDropped
 			}
 		}

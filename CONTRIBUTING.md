@@ -22,6 +22,27 @@ make install     # make uninstall to remove
 
 Override the location with `PREFIX`, e.g. `sudo make install PREFIX=/usr/local`.
 
+## Code layout
+
+All one `package main`, split by concern:
+
+| File | Holds |
+|---|---|
+| `main.go` | startup, tray wiring |
+| `assets.go` | embedded icons, build-stamped `version` |
+| `config.go` | config load/save, `configDir` (portable) |
+| `state.go` | `AppState` and the BPM-file lifecycle |
+| `ble.go` | scanning, the connect/reconnect state machine, constants |
+| `tray.go` | tray menu and rendering |
+
+Platform-specific code sits behind a contract so the shared files never branch
+on the OS. The contract is `dataDir`, `notify`, `openLogFolder`, the autostart
+trio, `openAdapter`, and `acquireInstanceLock`. Linux implements it in
+`platform_linux.go` and `lock_unix.go` (flock; the `unix` build tag also covers
+macOS). Go picks the right file by its `_linux` / `_darwin` / `_windows` suffix.
+Adding an OS means writing one `platform_<os>.go` (plus `lock_windows.go` for
+Windows) against that contract, touching no shared files.
+
 ## Releasing
 
 The version comes from git tags. The tag you push is the version that ships.

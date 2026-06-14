@@ -30,7 +30,7 @@ Config and data live under `~/.config/gotempo` and `~/.local/share/gotempo` (see
 ## Requirements
 
 - Linux with BlueZ (`bluetooth.service` running)
-- A StatusNotifierItem system tray (XFCE, KDE, most modern panels). The app won't start without one.
+- A StatusNotifierItem system tray (XFCE, KDE, most modern panels). The app won't start without one. GNOME has no built-in tray; install the [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/) extension to get the tray icon.
 - `notify-send` (from `libnotify`), optional. Notifications are skipped if missing.
 
 

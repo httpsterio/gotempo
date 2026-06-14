@@ -1,26 +1,36 @@
 # gotempo todo
 
-## Split main.go into multiple files
-main.go is ~1240 lines. Split along existing section seams, all still `package main`:
-- `paths.go`: XDG paths, autostart, instance lock
-- `config.go`: Config/KnownDevice, load/save, upsert/touch/sortedKnown
-- `ble.go`: scanning, ensureAdapter, AppState, connect/reconnect state machine
-- `tray.go`: tray struct, refresh/renderSwitch/loop, buildEntries/slotLabel
-- `main.go`: main(), constants, embeds, notify
-No behaviour change. Split tests to match. Optional, low priority.
+## Done
 
-## Dead code cleanup
-- Remove unused `resetBPM` (no callers).
-- Log the `os.WriteFile` error in `onSwitch` for consistency with handleBPM.
+- **Split main.go into multiple files.** Done, and taken further than a flat
+  split: the code is now cross-platform-ready. Shared files (`main.go`,
+  `assets.go`, `config.go`, `state.go`, `ble.go`, `tray.go`) hold all behaviour;
+  platform-specific calls sit behind a contract in `platform_linux.go` and
+  `lock_unix.go`. See CONTRIBUTING.md "Code layout".
+- **Dead code cleanup.** Removed unused `resetBPM`; `onSwitch` now logs its
+  `WriteFile` error like `handleBPM`.
+- **Improve logging.** The persistent phase is no longer silent:
+  - swallowed connect/discovery errors are surfaced (`persistentConnect`);
+  - session length logged on drop (`connectAndMonitor`);
+  - per-minute "still scanning" heartbeat plus "back in range after N" on return
+    (`persistScan`);
+  - `[BLE]` prefix on the bare `scan error:` / `invalid mac:` lines.
 
 ## BLE reconnect robustness
-See [BUGS.md](BUGS.md) (strap won't reconnect after a long idle).
-- Connect a known device by address instead of requiring a scan hit. A bonded or already-connected strap does not advertise, so the scan-gate locks it out. Try direct connect, fall back to scan.
-- Log the connect/discovery error in the persistent phase. `persistentConnect` swallows it now, so failures are invisible until a restart drops into the finite phase.
-- Maybe: self-heal by dropping the BlueZ bond and reconnecting after repeated `service discovery timed out` on a known device (only safe for Just Works devices).
+See [BUGS.md](BUGS.md) (strap won't reconnect after a long idle). Logging is
+done, so the next organic failure should be self-diagnosing. Remaining, in
+order:
+- **Connect a known device by address** instead of requiring a scan hit. A
+  bonded or already-connected strap does not advertise, so the scan-gate locks
+  it out. Try direct connect, fall back to scan. Most likely tied to the bug.
+- **Self-heal** by dropping the BlueZ bond and reconnecting after repeated
+  `service discovery timed out` on a known device (only safe for Just Works
+  devices). Do the aging test from BUGS.md first to confirm the trigger.
 
-## Improve logging
-Not just errors. Make the log useful for debugging connection issues.
-- Log lifecycle events: scan start/result, connect, disconnect, session length, reconnect, device switch, adapter changes.
-- Consider log levels (info/warn/error) and a quiet default.
-- Timestamps are already there; keep them.
+## Cross-platform: macOS and Windows
+The split prepared the ground; the implementations are not written. Each new OS
+needs one `platform_<os>.go` implementing the contract (`dataDir`, `notify`,
+`openLogFolder`, the autostart trio, `openAdapter`), plus `lock_windows.go` for
+Windows (flock is shared via `lock_unix.go` on Linux/macOS). No shared files
+should need editing. `describeConnectErr` strings are BlueZ-specific and fall
+through harmlessly elsewhere.
