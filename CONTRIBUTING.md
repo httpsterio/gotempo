@@ -68,3 +68,5 @@ make release VERSION=v1.0.2
 ```
 
 It validates the version, checks the tree is clean, runs the tests, then tags and pushes. Pushing a `v*.*.*` tag triggers `.github/workflows/release.yml`, which builds the binary, packages the `linux-amd64` tarball with the installer, and publishes a GitHub release.
+
+The end-user installers live in `scripts/` (`install.sh`, `uninstall.sh`); the workflow copies them to the tarball root, so a user extracts and runs `./install.sh`. `make install` is the source-build path and generates the `.desktop` entry itself, so there is no `.desktop` file in the tree.

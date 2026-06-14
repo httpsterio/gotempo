@@ -36,7 +36,7 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           DIST="gotempo-${TAG}-linux-amd64"
           mkdir -p "$DIST/assets"
-          cp gotempo install.sh uninstall.sh "$DIST/"
+          cp gotempo scripts/install.sh scripts/uninstall.sh "$DIST/"
           cp assets/logo.png "$DIST/assets/"
           chmod +x "$DIST/install.sh" "$DIST/uninstall.sh"
           tar -czf "${DIST}.tar.gz" "$DIST"

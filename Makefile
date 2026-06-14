@@ -23,6 +23,21 @@ ICON_SRC := assets/logo.png
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
+# The .desktop entry is fully static, so it is generated at install time rather
+# than kept as a file in the tree. scripts/install.sh carries the same content
+# for the release tarball (which ships without this Makefile).
+define DESKTOP_ENTRY
+[Desktop Entry]
+Type=Application
+Name=gotempo
+Comment=Heart-rate monitor tray app
+Exec=gotempo
+Icon=gotempo
+Terminal=false
+Categories=Utility;
+endef
+export DESKTOP_ENTRY
+
 .PHONY: all build install uninstall clean release
 
 all: build
@@ -33,7 +48,8 @@ build:
 install: build
 	install -Dm755 $(BIN) $(BINDIR)/$(BIN)
 	install -Dm644 $(ICON_SRC) $(ICONDIR)/$(BIN).png
-	install -Dm644 $(BIN).desktop $(APPDIR)/$(BIN).desktop
+	@mkdir -p $(APPDIR)
+	@printf '%s\n' "$$DESKTOP_ENTRY" > $(APPDIR)/$(BIN).desktop
 	-update-desktop-database $(APPDIR) 2>/dev/null || true
 	-gtk-update-icon-cache -f -t $(DATADIR)/icons/hicolor 2>/dev/null || true
 	@echo "Installed $(BIN) to $(BINDIR) (ensure it is on your PATH)."
