@@ -168,9 +168,11 @@ WantedBy=default.target
   timestamp gaps not rows; a gap over `session_gap_minutes` starts a new file,
   shorter breaks append. Restart and toggle-on resume the latest file via one
   gap rule (`mostRecentSession`/`lastTimestamp`), skipping header-only crash
-  orphans. Every write flushes, so files are crash-safe; a per-minute
-  `gapCheckLoop` closes an idle session. `gotempo-bpm.txt` is untouched, keeps
-  its stale-hold. Defaults 60min / 20bpm in `config.go`; tests in
+  orphans. Writes are unbuffered so files are crash-readable without per-row
+  fsync; `gapCheckLoop` (per-minute) closes idle sessions and fsyncs the open
+  one, bounding power-loss exposure to ~60s. Logging is gated by `enabled` under
+  the session mutex, closing the toggle-off race. `gotempo-bpm.txt` is untouched,
+  keeps its stale-hold. Defaults 60min / 20bpm in `config.go`; tests in
   `session_test.go`.
 - **Split main.go into multiple files.** Done, and taken further than a flat
   split: the code is now cross-platform-ready. Shared files (`main.go`,

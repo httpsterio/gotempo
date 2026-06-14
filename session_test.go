@@ -33,7 +33,7 @@ func readSessions(t *testing.T, dir string) map[string]string {
 
 func TestSessionLoggerDropsJunk(t *testing.T) {
 	dir := t.TempDir()
-	s := newSessionLogger(dir, time.Hour, 20)
+	s := newSessionLogger(dir, time.Hour, 20, true)
 	base := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
 
 	if err := s.LogReading(base, 5); err != nil { // junk: below threshold
@@ -70,7 +70,7 @@ func TestSessionLoggerDropsJunk(t *testing.T) {
 
 func TestSessionLoggerGapStartsNewFile(t *testing.T) {
 	dir := t.TempDir()
-	s := newSessionLogger(dir, time.Hour, 20)
+	s := newSessionLogger(dir, time.Hour, 20, true)
 	base := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
 
 	if err := s.LogReading(base, 70); err != nil {
@@ -98,7 +98,7 @@ func TestSessionLoggerResume(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
 
-	s1 := newSessionLogger(dir, time.Hour, 20)
+	s1 := newSessionLogger(dir, time.Hour, 20, true)
 	if err := s1.LogReading(base, 70); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestSessionLoggerResume(t *testing.T) {
 	first := onlyName(t, dir)
 
 	// Restart, reading within gap → same file.
-	s2 := newSessionLogger(dir, time.Hour, 20)
+	s2 := newSessionLogger(dir, time.Hour, 20, true)
 	if err := s2.LogReading(base.Add(10*time.Minute), 71); err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestSessionLoggerResume(t *testing.T) {
 	}
 
 	// Restart, reading past gap → new file.
-	s3 := newSessionLogger(dir, time.Hour, 20)
+	s3 := newSessionLogger(dir, time.Hour, 20, true)
 	if err := s3.LogReading(base.Add(3*time.Hour), 72); err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +156,55 @@ func TestSessionLoggerSkipsEmptyOrphan(t *testing.T) {
 	}
 	if !last.Equal(base) {
 		t.Errorf("last = %v, want %v", last, base)
+	}
+}
+
+// A disabled logger ignores readings, and toggling off mid-session closes the
+// file without dropping the data already written. This guards the toggle-off
+// race: a reading arriving after setEnabled(false) must not reopen a session.
+func TestSessionLoggerDisabled(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
+
+	// Created disabled: readings are no-ops, no file appears.
+	off := newSessionLogger(dir, time.Hour, 20, false)
+	if err := off.LogReading(base, 70); err != nil {
+		t.Fatal(err)
+	}
+	if files := readSessions(t, dir); len(files) != 0 {
+		t.Fatalf("disabled logger wrote a file: %v", files)
+	}
+
+	// Enabled, write, then toggle off and replay a stray reading: it must not
+	// create a new file or add a row.
+	s := newSessionLogger(dir, time.Hour, 20, true)
+	if err := s.LogReading(base, 70); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LogReading(base.Add(time.Second), 71); err != nil {
+		t.Fatal(err)
+	}
+	s.setEnabled(false)
+	if err := s.LogReading(base.Add(2*time.Second), 72); err != nil {
+		t.Fatal(err)
+	}
+	files := readSessions(t, dir)
+	if len(files) != 1 {
+		t.Fatalf("want exactly one file after toggle-off, got: %v", files)
+	}
+	for _, body := range files {
+		if got := strings.Count(body, "\n"); got != 3 { // header + 2 rows, no stray
+			t.Errorf("want header + 2 rows (no post-toggle row), got %d lines:\n%s", got, body)
+		}
+	}
+
+	// Toggle back on within the gap resumes the same file.
+	s.setEnabled(true)
+	if err := s.LogReading(base.Add(3*time.Second), 73); err != nil {
+		t.Fatal(err)
+	}
+	if files := readSessions(t, dir); len(files) != 1 {
+		t.Fatalf("toggle-on within gap should resume, got: %v", files)
 	}
 }
 

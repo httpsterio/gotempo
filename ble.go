@@ -107,7 +107,7 @@ type App struct {
 func newApp(cfg *Config) *App {
 	return &App{
 		state:     &AppState{logging: cfg.AutoLog}, // autostart logging if enabled
-		session:   newSessionLogger(sessionsDir(), cfg.sessionGap(), cfg.minBPM()),
+		session:   newSessionLogger(sessionsDir(), cfg.sessionGap(), cfg.minBPM(), cfg.AutoLog),
 		cfg:       cfg,
 		uiUpdates: make(chan struct{}, 1),
 		stop:      make(chan struct{}),
@@ -115,20 +115,20 @@ func newApp(cfg *Config) *App {
 	}
 }
 
-// setLogging toggles BPM logging. Turning it off closes the CSV session handle;
-// turning it on lets the next valid reading open or resume a session per the
-// gap rule. The OBS overlay file is handled separately in handleBPM.
+// setLogging toggles BPM logging. setEnabled closes the CSV session on off and
+// gates LogReading under the session mutex, so a reading racing the toggle can't
+// reopen a session after it; turning it on lets the next valid reading open or
+// resume one per the gap rule. The OBS overlay file is handled separately in
+// handleBPM.
 func (a *App) setLogging(v bool) {
 	a.state.setLogging(v)
-	if !v {
-		a.session.Close()
-	}
+	a.session.setEnabled(v)
 }
 
-// gapCheckLoop closes an idle CSV session even when no readings arrive at all
-// (a dead connection), so it does not linger open until the next reading. Every
-// write already flushes, so this is cosmetic: it frees the handle and forces a
-// clean new file when readings resume.
+// gapCheckLoop runs the session's periodic upkeep: checkGap closes an idle
+// session when no readings arrive at all (a dead connection), and Flush fsyncs
+// the open session so power-loss exposure is bounded to one tick rather than
+// fsyncing every row.
 func (a *App) gapCheckLoop() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -138,6 +138,7 @@ func (a *App) gapCheckLoop() {
 			return
 		case now := <-ticker.C:
 			a.session.checkGap(now)
+			a.session.Flush()
 		}
 	}
 }

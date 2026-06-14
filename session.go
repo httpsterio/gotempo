@@ -19,30 +19,49 @@ func sessionsDir() string { return filepath.Join(dataDir(), "sessions") }
 // is a run of contiguous valid readings in one file; a gap longer than
 // gapThreshold starts a new file, a shorter one appends. Junk readings (below
 // minBPM) are ignored entirely: not written, no session, no gap extension, so
-// dropouts show up as gaps in the timestamp column rather than rows. Every
-// write is flushed, so a file is always complete if read mid-session or after
-// a crash. All methods are safe for concurrent use.
+// dropouts show up as gaps in the timestamp column rather than rows. Writes are
+// unbuffered (os.File.Write is a direct syscall), so a file is complete and
+// readable mid-session and after an app crash; fsync runs periodically (Flush)
+// and at session boundaries (endSession) for power-loss durability, not on every
+// row. All methods are safe for concurrent use.
 type SessionLogger struct {
 	dir          string
 	gapThreshold time.Duration
 	minBPM       int
 
 	mu          sync.Mutex
+	enabled     bool
 	currentFile *os.File
 	lastValid   time.Time
 }
 
-func newSessionLogger(dir string, gap time.Duration, minBPM int) *SessionLogger {
-	return &SessionLogger{dir: dir, gapThreshold: gap, minBPM: minBPM}
+func newSessionLogger(dir string, gap time.Duration, minBPM int, enabled bool) *SessionLogger {
+	return &SessionLogger{dir: dir, gapThreshold: gap, minBPM: minBPM, enabled: enabled}
 }
 
-// LogReading records one reading. Junk (bpm < minBPM) is dropped.
+// setEnabled toggles logging. Turning it off closes the current session. The
+// enabled check lives under the same mutex as the file open/write, so a reading
+// racing with a toggle-off can never reopen a session after it.
+func (s *SessionLogger) setEnabled(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enabled = v
+	if !v {
+		s.endSession()
+	}
+}
+
+// LogReading records one reading. Junk (bpm < minBPM) is dropped, as is any
+// reading received while disabled.
 func (s *SessionLogger) LogReading(t time.Time, bpm int) error {
 	if bpm < s.minBPM {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.enabled {
+		return nil
+	}
 
 	if s.currentFile != nil && t.Sub(s.lastValid) > s.gapThreshold {
 		s.endSession()
@@ -58,8 +77,9 @@ func (s *SessionLogger) LogReading(t time.Time, bpm int) error {
 
 // checkGap closes an idle session whose last reading is older than the gap. Run
 // it periodically so a dead connection (no readings at all) still ends the
-// session promptly. Correctness-wise it is cosmetic, since every write flushes;
-// it only frees the handle and forces a clean new file when readings resume.
+// session promptly. Correctness-wise it is cosmetic, since writes are crash-safe
+// already; it only frees the handle and forces a clean new file when readings
+// resume.
 func (s *SessionLogger) checkGap(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -68,9 +88,19 @@ func (s *SessionLogger) checkGap(now time.Time) {
 	}
 }
 
+// Flush fsyncs the open session, if any. Called on a timer so power-loss
+// exposure is bounded to the tick interval rather than fsyncing every row.
+func (s *SessionLogger) Flush() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.currentFile != nil {
+		_ = s.currentFile.Sync()
+	}
+}
+
 // Close ends the current session, releasing the file handle. The file is
-// already complete; this just frees the handle when logging is toggled off or
-// the app quits. A later reading reopens via the gap rule.
+// already complete; this just frees the handle when the app quits. A later
+// reading reopens via the gap rule.
 func (s *SessionLogger) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -78,10 +108,11 @@ func (s *SessionLogger) Close() {
 }
 
 func (s *SessionLogger) writeLine(t time.Time, bpm int) error {
-	if _, err := fmt.Fprintf(s.currentFile, "%s,%d\n", t.Format(time.RFC3339), bpm); err != nil {
-		return err
-	}
-	return s.currentFile.Sync() // flush: file stays complete if read mid-session or after a crash
+	// Unbuffered: the row reaches the kernel page cache here, so it is readable
+	// and survives an app crash without fsync. Durability against power loss is
+	// handled by Flush/endSession.
+	_, err := fmt.Fprintf(s.currentFile, "%s,%d\n", t.Format(time.RFC3339), bpm)
+	return err
 }
 
 // openSession resumes the most recent file if its last reading is within the
@@ -115,9 +146,11 @@ func (s *SessionLogger) openSession(t time.Time) error {
 	return nil
 }
 
-// endSession closes the open file, if any. Caller holds s.mu.
+// endSession fsyncs and closes the open file, if any, so every session boundary
+// (gap split, toggle-off, quit) is durable. Caller holds s.mu.
 func (s *SessionLogger) endSession() {
 	if s.currentFile != nil {
+		_ = s.currentFile.Sync()
 		s.currentFile.Close()
 		s.currentFile = nil
 	}
