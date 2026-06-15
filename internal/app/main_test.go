@@ -8,7 +8,7 @@ import (
 
 func TestParseConfigMigratesLegacy(t *testing.T) {
 	legacy := `{"mac":"24:AC:AC:18:41:CC","name":"Polar H10 1841CC31"}`
-	cfg := parseConfig([]byte(legacy))
+	cfg, _ := parseConfig([]byte(legacy))
 	if cfg == nil {
 		t.Fatal("parseConfig returned nil for legacy config")
 	}
@@ -32,7 +32,7 @@ func TestConfigAutoLogRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := parseConfig(data)
+	got, _ := parseConfig(data)
 	if got == nil {
 		t.Fatal("parseConfig returned nil")
 	}
@@ -45,12 +45,90 @@ func TestParseConfigKeepsDevicelessAutoLog(t *testing.T) {
 	// A config with no current device but auto_log set must be preserved,
 	// otherwise the preference is lost before a device is ever picked.
 	data := `{"current":"","known":null,"auto_log":true}`
-	got := parseConfig([]byte(data))
+	got, _ := parseConfig([]byte(data))
 	if got == nil {
 		t.Fatal("parseConfig discarded a device-less config")
 	}
 	if !got.AutoLog {
 		t.Error("AutoLog lost for device-less config")
+	}
+}
+
+func TestParseConfigDefaultsMissingKeys(t *testing.T) {
+	// Only current set; everything else must come from defaults, and the config
+	// must be flagged changed so it gets rewritten complete.
+	cfg, changed := parseConfig([]byte(`{"current":"AA:BB"}`))
+	if cfg == nil {
+		t.Fatal("parseConfig returned nil")
+	}
+	if !changed {
+		t.Error("changed = false, want true for a config missing keys")
+	}
+	if cfg.SessionGapMinutes != defaultSessionGapMinutes {
+		t.Errorf("gap = %d, want default %d", cfg.SessionGapMinutes, defaultSessionGapMinutes)
+	}
+	if cfg.MinBPMThreshold != defaultMinBPMThreshold {
+		t.Errorf("minBPM = %d, want default %d", cfg.MinBPMThreshold, defaultMinBPMThreshold)
+	}
+	if cfg.AutoLog {
+		t.Error("auto_log should default to false")
+	}
+}
+
+func TestParseConfigRejectsInvalidValues(t *testing.T) {
+	// Wrong types and out-of-range values must each fall back to the default,
+	// and the config must be flagged changed.
+	data := `{"current":"AA","auto_log":"yes","session_gap_minutes":"oops","min_bpm_threshold":-5}`
+	cfg, changed := parseConfig([]byte(data))
+	if cfg == nil {
+		t.Fatal("parseConfig returned nil")
+	}
+	if !changed {
+		t.Error("changed = false, want true for invalid values")
+	}
+	if cfg.AutoLog {
+		t.Error("invalid auto_log should fall back to false")
+	}
+	if cfg.SessionGapMinutes != defaultSessionGapMinutes {
+		t.Errorf("invalid gap kept: %d", cfg.SessionGapMinutes)
+	}
+	if cfg.MinBPMThreshold != defaultMinBPMThreshold {
+		t.Errorf("negative minBPM kept: %d", cfg.MinBPMThreshold)
+	}
+}
+
+func TestParseConfigRejectsDecimalGap(t *testing.T) {
+	// session_gap_minutes is a whole number; a decimal is invalid.
+	cfg, changed := parseConfig([]byte(`{"session_gap_minutes":60.5}`))
+	if cfg.SessionGapMinutes != defaultSessionGapMinutes {
+		t.Errorf("decimal gap accepted: %d", cfg.SessionGapMinutes)
+	}
+	if !changed {
+		t.Error("changed = false for decimal gap")
+	}
+}
+
+func TestParseConfigAcceptsValidValues(t *testing.T) {
+	// A complete, valid config (zero is a valid floor) round-trips unchanged.
+	data := `{"current":"AA","known":[],"auto_log":true,"session_gap_minutes":30,"min_bpm_threshold":0}`
+	cfg, changed := parseConfig([]byte(data))
+	if cfg == nil {
+		t.Fatal("parseConfig returned nil")
+	}
+	if changed {
+		t.Error("changed = true for an already-complete valid config")
+	}
+	if cfg.SessionGapMinutes != 30 {
+		t.Errorf("gap = %d, want 30", cfg.SessionGapMinutes)
+	}
+	if cfg.MinBPMThreshold != 0 {
+		t.Errorf("minBPM = %d, want 0 (no floor)", cfg.MinBPMThreshold)
+	}
+	if cfg.minBPM() != 0 {
+		t.Errorf("minBPM() = %d, want 0 (zero is a valid floor)", cfg.minBPM())
+	}
+	if !cfg.AutoLog {
+		t.Error("auto_log lost")
 	}
 }
 

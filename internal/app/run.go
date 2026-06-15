@@ -32,9 +32,13 @@ func Run() {
 		log.Println("could not create data directory:", err)
 	}
 
-	cfg := loadConfig()
-	if cfg == nil {
-		cfg = &Config{}
+	cfg, changed := loadConfig()
+	if changed {
+		// First run (no file) or a config that was missing keys / had invalid
+		// values: write the validated, complete form back so it self-documents.
+		if err := saveConfig(*cfg); err != nil {
+			log.Println("could not write config:", err)
+		}
 	}
 	if cfg.Current == "" {
 		log.Println("no device configured — pick one from the tray ‘Devices’ menu")

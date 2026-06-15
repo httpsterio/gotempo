@@ -92,7 +92,7 @@ gotempo uses standard XDG directories, created on first run:
 
 ## Configuration
 
-`config.json` is written and updated automatically. You can edit it by hand, which is handy for headless setups where you set the device without the tray:
+`config.json` is created on first run with all keys at their defaults, and updated automatically after that. You can edit it by hand, which is handy for headless setups where you set the device without the tray. On launch each value is validated; a missing, malformed, or out-of-range entry is reset to its default and the file is rewritten, so it never holds a value the app silently ignores:
 
 ```json
 {
