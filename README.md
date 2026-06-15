@@ -14,6 +14,7 @@ Works with any BLE monitor using the standard GATT HR profile (0x180D / 0x2A37):
 - [Build from source](#build-from-source)
 - [First launch](#first-launch)
 - [Tray menu](#tray-menu)
+- [Command line](#command-line)
 - [Reconnection behaviour](#reconnection-behaviour)
 - [Files](#files)
 - [Configuration](#configuration)
@@ -66,6 +67,57 @@ On first connect, accept the pairing prompt if it appears. Most straps allow one
 | **Autostart HR log** | When checked, logging starts automatically on launch. |
 | **Start on boot** | Adds or removes `~/.config/autostart/gotempo.desktop`. |
 | **Quit** | Exits the app. |
+
+
+## Command line
+
+gotempo runs in the tray by default. Flags let it run headless or answer
+one-shot queries, for systems without a tray or for scripts and status bars.
+
+| Flag | Effect |
+|---|---|
+| `--no-tray` | Run headless (no tray), connecting and logging per config, until `SIGINT`/`SIGTERM`. Needs a device set in `config.json`. |
+| `--print-bpm` | Stream each reading to stdout as `<unix_time> <bpm>`. Implies `--no-tray`. |
+| `--status` | Report the running app's status and exit: `72 bpm`, `no signal`, or `gotempo is not running`. |
+| `--list-devices` | Scan for HR monitors, print `MAC<tab>name` per line, exit. |
+| `--json` | Machine-readable JSON for `--status`, `--print-bpm`, `--list-devices`. |
+| `--config <path>` | Use a config file at `<path>` (must already exist). |
+| `--version`, `-v` | Print version and exit. |
+
+`--status` reports the state of the running gotempo; it never connects to a
+device itself. The running app owns the one BLE connection a strap allows, so
+`--status` only inspects that app's published value and writes nothing. If
+gotempo isn't running there's no status to report and it exits non-zero. This
+makes it safe to poll from a status bar alongside the tray or `--no-tray` app.
+(A standalone "read a BPM without a running app" mode would be a separate flag;
+it isn't implemented.)
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | Clean exit; `--status`: running and connected |
+| 1 | Config error (missing `--config` file, bad flags) |
+| 2 | `--status`: running but not connected |
+| 3 | Bluetooth adapter unavailable, or `--no-tray` with no device configured |
+| 4 | `--status`: gotempo is not running |
+
+Run headless as a systemd user service:
+
+```ini
+[Unit]
+Description=gotempo HR monitor
+
+[Service]
+ExecStart=/usr/local/bin/gotempo --no-tray
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Set the device and `"auto_log": true` in `config.json` first, since headless
+mode has no device picker.
 
 
 ## Reconnection behaviour

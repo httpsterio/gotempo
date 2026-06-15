@@ -29,7 +29,8 @@ lives in one `internal/app` package, split by concern:
 
 | File (`internal/app/`) | Holds |
 |---|---|
-| `run.go` | startup, tray wiring (the old `main`, now `Run`) |
+| `run.go` | startup, flag dispatch, tray and headless run loops |
+| `cli.go` | flag parsing, the one-shot/headless commands, output formatting |
 | `assets.go` | embedded icons (`assets/`), build-stamped `version` |
 | `config.go` | config load/save, `configDir` (portable) |
 | `state.go` | `AppState` and the BPM-file lifecycle |

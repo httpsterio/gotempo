@@ -6,6 +6,12 @@ Goal: allow gotempo to run fully headless (no systray/AppIndicator) and be
 controllable via flags, for users without tray support or who want to run it
 as a service/from scripts.
 
+Core slice shipped (see Done): `--no-tray`, `--list-devices`, `--status`,
+`--print-bpm`, `--json`, `--config`, `--version`/`-v`. Still deferred:
+`--device`, `--autostart`/`--no-autostart`, `--auto-log`/`--no-auto-log`,
+`--quiet`, `--log-level`. The per-flag specs below remain the reference for the
+deferred set; the shipped flags' specs describe implemented behavior.
+
 ### Flags
 
 #### `--no-tray`
@@ -62,26 +68,27 @@ This runs alongside normal operation (BPM file writing, session logging
 continue as configured), it's an additional output stream, not a replacement.
 
 #### `--status [--json]`
-One-shot mode: connect to the configured/specified device, wait for a single
-valid BPM reading (or timeout after e.g. 10 seconds), print it, exit.
+Report the status of the *running* gotempo, then exit. It never connects to a
+device itself: a strap allows one BLE connection and that belongs to the running
+app, so `--status` only inspects the app's state and writes nothing. The
+instance lock is the "is it running" signal (acquired, then dropped at once).
 
-Plain output:
-```
-72 bpm
-```
+- lock free → nothing running, no status (exit 4)
+- lock held + bpm file has a value → running and connected (exit 0)
+- lock held + bpm file empty → running, not connected (exit 2)
 
-With `--json`:
+Plain output: `72 bpm`, `no signal`, or `gotempo is not running`.
+
+With `--json`, always carries `running` and `connected` so a poller can branch
+on either; `bpm` is null unless connected:
 ```json
-{"bpm": 72, "connected": true, "timestamp": "2026-06-08T14:23:00+03:00"}
+{"running": true, "connected": true, "bpm": 72, "timestamp": "2026-06-08T14:23:00+03:00"}
 ```
 
-If no reading within timeout, plain output prints `no signal` (or similar)
-and JSON output sets `"connected": false, "bpm": null`. Exit code reflects
-connection status: 0 if connected (reading received), 2 if no signal within
-timeout.
-
-Intended for status bar widgets (waybar, polybar) that poll periodically
-rather than running gotempo persistently.
+Intended for status bar widgets (waybar, polybar) polling alongside the tray or
+`--no-tray` app. A standalone "give me a reading even with no app running" is a
+different operation and would get its own flag (e.g. `--read`); deliberately not
+folded into `--status`.
 
 #### `--quiet`
 Suppress all stdout/stderr output except errors. Errors still print to
@@ -105,19 +112,20 @@ banner on startup, if any.
 
 | Code | Meaning |
 |------|---------|
-| 0 | Clean exit |
-| 1 | Config error (missing/invalid config file, bad flag combination) |
-| 2 | BLE connection failed / no signal (device not reachable or no reading within timeout for `--status`) |
-| 3 | BLE adapter not available, or `--device` specified but not found during scan |
-| 4 | File I/O error (can't write to log directory, permissions, etc) |
+| 0 | Clean exit; `--status`: running and connected |
+| 1 | Config error (missing `--config` file, bad flag combination) |
+| 2 | `--status`: running but not connected |
+| 3 | BLE adapter not available, `--no-tray` with no device, or (deferred) `--device` not found |
+| 4 | `--status`: gotempo is not running |
 
-Document these in `--help` output and in the README.
+Documented in `--help` output and the README. (File-I/O failures currently log
+and continue rather than mapping to a distinct exit code.)
 
 ### Signal handling
 
-- `SIGTERM` / `SIGINT`: clean shutdown. Close current session file properly
-  (per session logging spec: discard buffered junk, flush, close). Close BLE
-  connection. Exit 0.
+- `SIGTERM` / `SIGINT`: clean shutdown. Flush and close the current CSV session
+  (writes are unbuffered, so this is just a final fsync + close). Stop the BLE
+  worker. Exit 0.
 - No need for `SIGHUP`/config-reload support initially, out of scope.
 
 ### Service-friendly behavior
@@ -162,6 +170,19 @@ WantedBy=default.target
 
 ## Done
 
+- **CLI / headless core.** `cli.go` adds flag parsing and the one-shot/headless
+  modes; `run.go` dispatches. `--no-tray` (and `--print-bpm`, which implies it)
+  run the BLE worker with no tray until SIGINT/SIGTERM, taking the instance lock
+  and exiting 3 if no device is configured (no picker headless). `--list-devices`
+  and `--status` are one-shot. `--status` reports the *running* app's state only:
+  it probes the instance lock (then drops it), and if an instance holds it reads
+  that instance's `gotempo-bpm.txt` (running+connected → 0, running+not connected
+  → 2); if the lock is free, nothing is running (exit 4). It never connects to a
+  device, opens an adapter, or writes files. `--json` switches
+  `--status`/`--print-bpm`/`--list-devices` to machine output; `--config <path>`
+  overrides the config location (must exist). Exit codes 0/1/2/3/4 per the table.
+  `onReading` hook in `handleBPM` feeds the raw stream (used by `--print-bpm`).
+  Tests in `cli_test.go`.
 - **CSV session logging.** `session.go`: `SessionLogger` writes valid readings
   to per-session `sessions/<start>.csv` files, gated by the same logging toggle
   as the OBS file. Junk (below `min_bpm_threshold`) is dropped, so dropouts are

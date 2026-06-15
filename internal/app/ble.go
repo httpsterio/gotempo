@@ -102,6 +102,11 @@ type App struct {
 	uiUpdates chan struct{}
 	stop      chan struct{}
 	switchCh  chan struct{}
+
+	// onReading, if set, is called for every reading received (before the
+	// logging gate and junk filter), used by --print-bpm and the --status
+	// self-connect path. Set once before the worker starts, then read-only.
+	onReading func(time.Time, int)
 }
 
 func newApp(cfg *Config) *App {
@@ -238,6 +243,14 @@ func (a *App) markConnected(mac string) {
 }
 
 func (a *App) handleBPM(bpm int) {
+	now := time.Now()
+
+	// Raw output stream (--print-bpm / --status): every reading as received,
+	// independent of the logging toggle and junk filter.
+	if a.onReading != nil {
+		a.onReading(now, bpm)
+	}
+
 	a.state.mu.Lock()
 	logging := a.state.logging
 	a.state.mu.Unlock()
@@ -247,7 +260,7 @@ func (a *App) handleBPM(bpm int) {
 
 	// CSV session log: every valid reading at full cadence (no dedup), so the
 	// file keeps a row per second. Junk is filtered inside LogReading.
-	if err := a.session.LogReading(time.Now(), bpm); err != nil {
+	if err := a.session.LogReading(now, bpm); err != nil {
 		log.Printf("[CSV] %v", err)
 	}
 

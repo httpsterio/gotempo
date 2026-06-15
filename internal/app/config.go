@@ -20,7 +20,16 @@ func configDir() string {
 	return filepath.Join(base, "gotempo")
 }
 
-func configPath() string { return filepath.Join(configDir(), "config.json") }
+// configPathOverride, when set (by the --config flag), replaces the default
+// config location for the whole process.
+var configPathOverride string
+
+func configPath() string {
+	if configPathOverride != "" {
+		return configPathOverride
+	}
+	return filepath.Join(configDir(), "config.json")
+}
 func logsDir() string    { return dataDir() }
 func outputPath() string { return filepath.Join(logsDir(), "gotempo-bpm.txt") }
 
