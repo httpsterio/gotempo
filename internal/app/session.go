@@ -107,11 +107,18 @@ func (s *SessionLogger) Close() {
 	s.endSession()
 }
 
+// csvTimeFormat is RFC3339 with millisecond precision. The strap notifies at
+// ~1Hz but not phase-locked to wall-clock seconds, so second resolution beats
+// against the grid: some seconds carry two readings (look like duplicates),
+// others none (look like gaps). Milliseconds give each reading a distinct,
+// honest timestamp. Still RFC3339, so time.Parse(time.RFC3339, ...) reads it.
+const csvTimeFormat = "2006-01-02T15:04:05.000Z07:00"
+
 func (s *SessionLogger) writeLine(t time.Time, bpm int) error {
 	// Unbuffered: the row reaches the kernel page cache here, so it is readable
 	// and survives an app crash without fsync. Durability against power loss is
 	// handled by Flush/endSession.
-	_, err := fmt.Fprintf(s.currentFile, "%s,%d\n", t.Format(time.RFC3339), bpm)
+	_, err := fmt.Fprintf(s.currentFile, "%s,%d\n", t.Format(csvTimeFormat), bpm)
 	return err
 }
 
