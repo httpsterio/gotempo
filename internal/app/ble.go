@@ -104,8 +104,8 @@ type App struct {
 	switchCh  chan struct{}
 
 	// onReading, if set, is called for every reading received (before the
-	// logging gate and junk filter), used by --print-bpm and the --status
-	// self-connect path. Set once before the worker starts, then read-only.
+	// logging gate and junk filter), used by --print-bpm. Set once before the
+	// worker starts, then read-only.
 	onReading func(time.Time, int)
 }
 
@@ -128,6 +128,51 @@ func newApp(cfg *Config) *App {
 func (a *App) setLogging(v bool) {
 	a.state.setLogging(v)
 	a.session.setEnabled(v)
+	a.publishStatus() // reflect the new logging state at once
+}
+
+// publishStatus writes the current status (connection, phase, logging, bpm,
+// device) to status.json for `gotempo --status` to read. Assembled from the live
+// AppState plus the configured device.
+func (a *App) publishStatus() {
+	connected, logging, phase, bpm := a.state.statusView()
+	mac, name := a.currentDevice()
+	var dev *statusDevice
+	if mac != "" {
+		dev = &statusDevice{MAC: mac, Name: name}
+	}
+	writeStatus(appStatus{
+		Connected: connected,
+		Phase:     phase,
+		Logging:   logging,
+		BPM:       bpm,
+		Device:    dev,
+	})
+}
+
+// setPhase records a connection-phase transition and publishes it.
+func (a *App) setPhase(p string) {
+	a.state.setPhase(p)
+	a.publishStatus()
+}
+
+// recordBPM stores the latest reading (regardless of logging) and publishes it.
+func (a *App) recordBPM(bpm int) {
+	a.state.recordBPM(bpm)
+	a.publishStatus()
+}
+
+// currentDevice returns the configured device's MAC and (if known) its name.
+func (a *App) currentDevice() (mac, name string) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	mac = a.cfg.Current
+	for _, k := range a.cfg.Known {
+		if strings.EqualFold(k.MAC, mac) {
+			return mac, k.Name
+		}
+	}
+	return mac, ""
 }
 
 // gapCheckLoop runs the session's periodic upkeep: checkGap closes an idle
@@ -226,6 +271,7 @@ func (a *App) switchTo(mac, name string) {
 	}
 
 	a.state.onSwitch()
+	a.setPhase(phaseConnecting) // new device; worker will reconnect
 	a.signalSwitch()
 	a.signalUI()
 	log.Printf("[BLE] switching to %s (%s)", name, mac)
@@ -245,11 +291,15 @@ func (a *App) markConnected(mac string) {
 func (a *App) handleBPM(bpm int) {
 	now := time.Now()
 
-	// Raw output stream (--print-bpm / --status): every reading as received,
-	// independent of the logging toggle and junk filter.
+	// Raw output stream (--print-bpm): every reading as received, independent of
+	// the logging toggle and junk filter.
 	if a.onReading != nil {
 		a.onReading(now, bpm)
 	}
+
+	// Publish live status (bpm) regardless of logging, so --status and external
+	// pollers see the real reading even when logging is off.
+	a.recordBPM(bpm)
 
 	a.state.mu.Lock()
 	logging := a.state.logging
@@ -381,6 +431,7 @@ func (a *App) runBLE() {
 		mac := a.currentMAC()
 		if mac == "" {
 			// No device chosen yet — idle until one is picked from the tray.
+			a.setPhase(phaseIdle)
 			select {
 			case <-a.stop:
 				return
@@ -475,6 +526,7 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 // the finite schedule phase. It returns errStopped, errSwitched, errSessionDropped,
 // or a raw connect/discovery error.
 func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
+	a.setPhase(phaseConnecting)
 	log.Printf("[BLE] scanning for %s…", addr.MAC.String())
 	adapter, ok := a.findDevice(addr.MAC.String(), connectScanTimeout)
 	if adapter == nil {
@@ -490,6 +542,7 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 // device is seen or the app is stopped/switched. Holding scanMu only per round
 // lets the tray's own scans (Rescan) interleave instead of blocking.
 func (a *App) persistScan(target string) (*bluetooth.Adapter, error) {
+	a.setPhase(phaseReconnecting)
 	start := time.Now()
 	var lastLog time.Time // zero value forces a log on the first round
 	for {
@@ -603,6 +656,7 @@ func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Addre
 	log.Println("[BLE] connected")
 	connectedAt := time.Now()
 	a.state.onConnect()
+	a.setPhase(phaseConnected)
 	a.markConnected(addr.MAC.String())
 	if wasNotified {
 		notify("reconnected")

@@ -48,21 +48,23 @@ Same as above but for the `auto_log` setting (whether session CSV logging
 starts automatically when valid BPM readings begin, per the session logging
 spec).
 
-#### `--print-bpm`
+#### `--print-bpm [--epoch | --timestamp]`
 Print each BPM reading to stdout, one per line, as it's received. Format:
 
 ```
-<unix_timestamp> <bpm>
+<time> <bpm>
 ```
 
-or with `--json`:
+The time defaults to `hh:mm:ss`; `--epoch` renders unix seconds and
+`--timestamp` renders RFC3339 (the two are mutually exclusive, bad combo →
+exit 1). With `--json` each line is one object (newline-delimited, not an
+array, so it streams):
 
 ```json
-{"timestamp": "2026-06-08T14:23:00+03:00", "bpm": 72}
+{"timestamp": "14:23:00", "bpm": 72}
 ```
 
-one JSON object per line (newline-delimited JSON), not a JSON array, so it
-can be piped/streamed.
+`timestamp` is a JSON number under `--epoch`, a string otherwise.
 
 This runs alongside normal operation (BPM file writing, session logging
 continue as configured), it's an additional output stream, not a replacement.
@@ -70,20 +72,27 @@ continue as configured), it's an additional output stream, not a replacement.
 #### `--status [--json]`
 Report the status of the *running* gotempo, then exit. It never connects to a
 device itself: a strap allows one BLE connection and that belongs to the running
-app, so `--status` only inspects the app's state and writes nothing. The
-instance lock is the "is it running" signal (acquired, then dropped at once).
+app, so `--status` only inspects the app's published state and writes nothing.
+The instance lock is the "is it running" signal (acquired, then dropped at once);
+the running app maintains `status.json` (connection, phase, logging, bpm,
+device) independent of logging, which `--status` reads.
 
 - lock free → nothing running, no status (exit 4)
-- lock held + bpm file has a value → running and connected (exit 0)
-- lock held + bpm file empty → running, not connected (exit 2)
+- lock held + status.json connected with a reading → exit 0
+- lock held + status.json otherwise (connecting / not connected) → exit 2
 
-Plain output: `72 bpm`, `no signal`, or `gotempo is not running`.
+Plain output is one line: `connected, 61 bpm, Polar H10, logging off`,
+`reconnecting, Polar H10, logging on`, `idle, no device`, or `gotempo is not
+running`.
 
-With `--json`, always carries `running` and `connected` so a poller can branch
-on either; `bpm` is null unless connected:
+With `--json`, the full state for scripting:
 ```json
-{"running": true, "connected": true, "bpm": 72, "timestamp": "2026-06-08T14:23:00+03:00"}
+{"running":true,"connected":true,"phase":"connected","logging":false,"bpm":61,"device":{"mac":"…","name":"Polar H10"},"timestamp":"2026-06-08T14:23:00+03:00"}
 ```
+
+`phase` is `idle` (no device) / `connecting` / `reconnecting` (device lost,
+scanning) / `connected`, so a poller distinguishes those rather than flattening
+them into `connected:false`.
 
 Intended for status bar widgets (waybar, polybar) polling alongside the tray or
 `--no-tray` app. A standalone "give me a reading even with no app running" is a
@@ -176,9 +185,16 @@ WantedBy=default.target
   and exiting 3 if no device is configured (no picker headless). `--list-devices`
   and `--status` are one-shot. `--status` reports the *running* app's state only:
   it probes the instance lock (then drops it), and if an instance holds it reads
-  that instance's `gotempo-bpm.txt` (running+connected → 0, running+not connected
-  → 2); if the lock is free, nothing is running (exit 4). It never connects to a
-  device, opens an adapter, or writes files. `--json` switches
+  that instance's `status.json` — published independent of logging, so it is
+  correct even when logging is off (connected+reading → 0, otherwise → 2); if the
+  lock is free, nothing is running (exit 4). It never connects to a device, opens
+  an adapter, or writes files. `status.json` carries connection, a coarse `phase`
+  (idle/connecting/reconnecting/connected), the logging flag, current bpm, and
+  device; it is written atomically on connect, every reading, logging toggle, and
+  immediately on disconnect/switch (`App.publishStatus` / `setPhase` / `recordBPM`
+  in `ble.go`, phase transitions wired through the connect state machine).
+  `--print-bpm` renders the time as `hh:mm:ss` by default, unix seconds with
+  `--epoch`, or RFC3339 with `--timestamp`. `--json` switches
   `--status`/`--print-bpm`/`--list-devices` to machine output; `--config <path>`
   overrides the config location (must exist). Exit codes 0/1/2/3/4 per the table.
   `onReading` hook in `handleBPM` feeds the raw stream (used by `--print-bpm`).

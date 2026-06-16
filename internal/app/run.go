@@ -28,6 +28,11 @@ func Run() {
 		return
 	}
 
+	if opts.epoch && opts.timestamp {
+		fmt.Fprintln(os.Stderr, "--epoch and --timestamp are mutually exclusive")
+		os.Exit(1)
+	}
+
 	if opts.config != "" {
 		// An explicit path must exist: the user pointed somewhere specific, so
 		// silently falling back to defaults would hide a typo.
@@ -108,7 +113,7 @@ func (a *App) runHeadless(opts cliOptions) int {
 	}
 
 	if opts.printBPM {
-		a.onReading = func(t time.Time, bpm int) { printReading(t, bpm, opts.json) }
+		a.onReading = func(t time.Time, bpm int) { printReading(t, bpm, opts) }
 	}
 
 	go a.runBLE()

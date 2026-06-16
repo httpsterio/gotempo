@@ -33,6 +33,10 @@ func configPath() string {
 func logsDir() string    { return dataDir() }
 func outputPath() string { return filepath.Join(logsDir(), "gotempo-bpm.txt") }
 
+// statusPath is the cross-process status file the running instance maintains
+// (independent of logging) for `--status` to read. Beside gotempo-bpm.txt.
+func statusPath() string { return filepath.Join(dataDir(), "status.json") }
+
 type KnownDevice struct {
 	MAC      string `json:"mac"`
 	Name     string `json:"name"`

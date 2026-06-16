@@ -2,8 +2,8 @@ package app
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseFlags(t *testing.T) {
@@ -19,6 +19,8 @@ func TestParseFlags(t *testing.T) {
 		{"list", []string{"--list-devices"}, cliOptions{listDevices: true}},
 		{"no-tray", []string{"--no-tray"}, cliOptions{noTray: true}},
 		{"print-bpm", []string{"--print-bpm"}, cliOptions{printBPM: true}},
+		{"epoch", []string{"--print-bpm", "--epoch"}, cliOptions{printBPM: true, epoch: true}},
+		{"timestamp", []string{"--print-bpm", "--timestamp"}, cliOptions{printBPM: true, timestamp: true}},
 		{"config", []string{"--config", "/tmp/c.json"}, cliOptions{config: "/tmp/c.json"}},
 	}
 	for _, c := range cases {
@@ -31,6 +33,19 @@ func TestParseFlags(t *testing.T) {
 				t.Errorf("parseFlags(%v) = %+v, want %+v", c.args, got, c.want)
 			}
 		})
+	}
+}
+
+func TestFormatTS(t *testing.T) {
+	tm := time.Date(2026, 6, 16, 1, 2, 3, 0, time.UTC)
+	if got := formatTS(tm, tsClock); got != "01:02:03" {
+		t.Errorf("tsClock = %q, want 01:02:03", got)
+	}
+	if got := formatTS(tm, tsEpoch); got != "1781571723" {
+		t.Errorf("tsEpoch = %q, want 1781571723", got)
+	}
+	if got := formatTS(tm, tsFull); got != "2026-06-16T01:02:03Z" {
+		t.Errorf("tsFull = %q, want RFC3339", got)
 	}
 }
 
@@ -52,36 +67,50 @@ func TestHeadless(t *testing.T) {
 	}
 }
 
-func TestReadBPMFile(t *testing.T) {
+func TestStatusRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)
-	if err := os.MkdirAll(filepath.Dir(outputPath()), 0755); err != nil {
+	if err := os.MkdirAll(dataDir(), 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	write := func(s string) {
-		if err := os.WriteFile(outputPath(), []byte(s), 0644); err != nil {
-			t.Fatal(err)
-		}
+	// Missing file.
+	if _, ok := readStatus(); ok {
+		t.Error("missing status file should not be ok")
 	}
 
-	// Missing file.
-	if _, ok := readBPMFile(); ok {
-		t.Error("missing file should not be ok")
+	// Connected with a reading, logging on, a device, phase connected.
+	bpm := 72
+	writeStatus(appStatus{
+		Connected: true, Phase: phaseConnected, Logging: true, BPM: &bpm,
+		Device: &statusDevice{MAC: "AA:BB", Name: "H10"},
+	})
+	st, ok := readStatus()
+	if !ok || !st.Connected || st.BPM == nil || *st.BPM != 72 {
+		t.Errorf("readStatus() = %+v, %v; want connected with bpm 72", st, ok)
 	}
-	// Valid value (with surrounding whitespace).
-	write(" 72\n")
-	if bpm, ok := readBPMFile(); !ok || bpm != 72 {
-		t.Errorf("readBPMFile() = %d, %v; want 72, true", bpm, ok)
+	if st.Phase != phaseConnected || !st.Logging {
+		t.Errorf("phase/logging not round-tripped: %+v", st)
 	}
-	// Empty (not logging / cleared).
-	write("")
-	if _, ok := readBPMFile(); ok {
-		t.Error("empty file should not be ok")
+	if st.Device == nil || st.Device.Name != "H10" {
+		t.Errorf("device not round-tripped: %+v", st.Device)
 	}
-	// Garbage.
-	write("abc")
-	if _, ok := readBPMFile(); ok {
-		t.Error("unparseable file should not be ok")
+	if st.Updated == "" {
+		t.Error("status should carry an updated timestamp")
+	}
+
+	// Disconnected: connected false, bpm nil, phase reconnecting.
+	writeStatus(appStatus{Phase: phaseReconnecting})
+	st, ok = readStatus()
+	if !ok || st.Connected || st.BPM != nil || st.Phase != phaseReconnecting {
+		t.Errorf("readStatus() = %+v, %v; want reconnecting with nil bpm", st, ok)
+	}
+
+	// Unparseable.
+	if err := os.WriteFile(statusPath(), []byte("{not json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readStatus(); ok {
+		t.Error("unparseable status file should not be ok")
 	}
 }

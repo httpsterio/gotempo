@@ -33,7 +33,7 @@ lives in one `internal/app` package, split by concern:
 | `cli.go` | flag parsing, the one-shot/headless commands, output formatting |
 | `assets.go` | embedded icons (`assets/`), build-stamped `version` |
 | `config.go` | config load/save, `configDir` (portable) |
-| `state.go` | `AppState` and the BPM-file lifecycle |
+| `state.go` | `AppState`, the BPM-file lifecycle, and the `status.json` publisher |
 | `ble.go` | scanning, the connect/reconnect state machine, constants |
 | `session.go` | per-session CSV logging |
 | `tray.go` | tray menu and rendering |

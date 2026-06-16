@@ -77,20 +77,43 @@ one-shot queries, for systems without a tray or for scripts and status bars.
 | Flag | Effect |
 |---|---|
 | `--no-tray` | Run headless (no tray), connecting and logging per config, until `SIGINT`/`SIGTERM`. Needs a device set in `config.json`. |
-| `--print-bpm` | Stream each reading to stdout as `<unix_time> <bpm>`. Implies `--no-tray`. |
-| `--status` | Report the running app's status and exit: `72 bpm`, `no signal`, or `gotempo is not running`. |
+| `--print-bpm` | Stream each reading to stdout as `<time> <bpm>`. Implies `--no-tray`. |
+| `--epoch` | With `--print-bpm`, render the time as unix seconds. |
+| `--timestamp` | With `--print-bpm`, render the time as RFC3339 (default is `hh:mm:ss`). |
+| `--status` | Report the running app's state and exit (see below). |
 | `--list-devices` | Scan for HR monitors, print `MAC<tab>name` per line, exit. |
 | `--json` | Machine-readable JSON for `--status`, `--print-bpm`, `--list-devices`. |
 | `--config <path>` | Use a config file at `<path>` (must already exist). |
 | `--version`, `-v` | Print version and exit. |
 
+`--print-bpm` prints one reading per line. By default the time is `hh:mm:ss`;
+`--epoch` switches it to unix seconds and `--timestamp` to RFC3339 (the two are
+mutually exclusive). With `--json` each line is an object `{"timestamp":…,
+"bpm":…}` (timestamp is a number under `--epoch`).
+
 `--status` reports the state of the running gotempo; it never connects to a
 device itself. The running app owns the one BLE connection a strap allows, so
-`--status` only inspects that app's published value and writes nothing. If
-gotempo isn't running there's no status to report and it exits non-zero. This
-makes it safe to poll from a status bar alongside the tray or `--no-tray` app.
-(A standalone "read a BPM without a running app" mode would be a separate flag;
-it isn't implemented.)
+`--status` only inspects that app's published state and writes nothing. It
+reflects the live state whether or not logging is on. If gotempo isn't running
+there's no status to report and it exits non-zero. This makes it safe to poll
+from a status bar alongside the tray or `--no-tray` app. (A standalone "read a
+BPM without a running app" mode would be a separate flag; it isn't implemented.)
+
+Plain output is a single line, e.g. `connected, 61 bpm, Polar H10, logging off`,
+`reconnecting, Polar H10, logging on`, `idle, no device`, or `gotempo is not
+running`. `--json` gives the full state for scripting:
+
+```json
+{"running":true,"connected":true,"phase":"connected","logging":false,"bpm":61,"device":{"mac":"24:AC:AC:18:41:CC","name":"Polar H10"},"timestamp":"2026-06-16T02:40:00+03:00"}
+```
+
+`phase` is one of `idle` (no device), `connecting`, `reconnecting` (device lost,
+scanning), or `connected`, so a poller can tell "reconnecting" apart from "no
+device" rather than collapsing both into `connected:false`.
+
+`--config <path>` relocates only the config file. The BPM/status files and the
+single-instance lock stay at the shared data/runtime locations, so two
+`--config`s can't run side by side.
 
 Exit codes:
 
@@ -139,6 +162,7 @@ gotempo uses standard XDG directories, created on first run:
 - `~/.config/gotempo/config.json`: saved device, known-device history, and preferences. Managed by the app; see [Configuration](#configuration) to edit it by hand. Honors `$XDG_CONFIG_HOME`.
 - `~/.local/share/gotempo/gotempo-bpm.txt`: current BPM as a raw integer, rewritten on each change. Empty when not logging. Keeps the last reading briefly across a short dropout, then clears after about ten seconds disconnected. Honors `$XDG_DATA_HOME`.
 - `~/.local/share/gotempo/sessions/*.csv`: per-session history, one `timestamp,bpm` row per reading. Written while logging is on. A new file starts after a gap longer than `session_gap_minutes`; shorter breaks append to the current file. Readings below `min_bpm_threshold` (sensor off / no contact) are skipped, so they show as gaps in the timestamps rather than junk rows. Files are named by the session's first reading.
+- `~/.local/share/gotempo/status.json`: live app state published by the running app, independent of logging — connection, phase, logging flag, current BPM, and device. Read by `gotempo --status`. Honors `$XDG_DATA_HOME`.
 - `internal/app/assets/` (source tree only): tray status icons and `logo.png`, embedded in the binary at build time.
 
 
