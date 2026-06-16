@@ -101,6 +101,12 @@ func cmdRun(opts cliOptions) int {
 
 	app := newApp(cfg)
 
+	// Publish a fresh status for this run before the BLE worker starts, so a
+	// --status racing startup can't read a previous run's leftover status.json
+	// (the lock is already held, so the instance counts as live). runBLE advances
+	// the phase from here.
+	app.setPhase(phaseIdle)
+
 	// Probe for an adapter, but don't fail if Bluetooth is currently off — the
 	// worker keeps retrying once it comes back.
 	if _, err := app.ensureAdapter(); err != nil {
