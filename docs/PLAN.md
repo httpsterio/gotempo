@@ -7,10 +7,18 @@ controllable via flags, for users without tray support or who want to run it
 as a service/from scripts.
 
 Core slice shipped (see Done): `--no-tray`, `--list-devices`, `--status`,
-`--print-bpm`, `--json`, `--config`, `--version`/`-v`. Still deferred:
-`--device`, `--autostart`/`--no-autostart`, `--auto-log`/`--no-auto-log`,
-`--quiet`, `--log-level`. The per-flag specs below remain the reference for the
-deferred set; the shipped flags' specs describe implemented behavior.
+`--print-bpm`, `--json`, `--config`, `--version`/`-v`, `--autostart`/
+`--no-autostart`. Still deferred: `--device`, `--select-device`,
+`--auto-log`/`--no-auto-log`, `--quiet`, `--log-level`. The per-flag specs below
+remain the reference for the deferred set; the shipped flags' specs describe
+implemented behavior.
+
+Flags fall into two classes. **Session-only** flags (everything except the
+setup flags) affect the single run and never write `config.json` or disk.
+**Setup** flags persist a change: `--autostart`/`--no-autostart` write or remove
+the autostart entry and exit; `--device`/`--select-device` (deferred) save the
+chosen device to config and then continue into a normal run respecting the other
+flags.
 
 ### Flags
 
@@ -39,14 +47,22 @@ name), then exit immediately. Does not connect, does not start logging.
 Exit code 0 on successful scan (even if zero devices found), non-zero only
 on BLE adapter failure.
 
-#### `--autostart` / `--no-autostart`
-Override the config's `autostart` setting for this run only. Does not modify
-`config.json`. If neither flag is passed, use the config value.
+#### `--autostart` / `--no-autostart` (shipped)
+Setup flags. `--autostart` writes the autostart entry (launch-on-login),
+`--no-autostart` removes it; both then exit without starting the app. They wrap
+the platform autostart contract (`enableAutostart`/`disableAutostart`), so this
+is the CLI equivalent of the tray's "Start on boot" toggle. `--autostart`
+overwrites an existing entry silently; `--no-autostart` on a missing entry is a
+no-op success (exit 0, like `rm -f`). Only a real write/remove failure (e.g.
+permissions) is an error (exit 1). The two together is a bad combination
+(exit 1). The entry always launches the tray with no flags.
 
 #### `--auto-log` / `--no-auto-log`
-Same as above but for the `auto_log` setting (whether session CSV logging
-starts automatically when valid BPM readings begin, per the session logging
-spec).
+Override the `auto_log` setting for this run only. Does not modify `config.json`.
+Default is the config value, except headless (`--no-tray`) defaults `auto_log`
+on (a headless instance that connects but never logs is useless); `--no-auto-log`
+turns it back off. `--print-bpm` does **not** force logging on (printing is the
+output there).
 
 #### `--print-bpm [--epoch | --timestamp]`
 Print each BPM reading to stdout, one per line, as it's received. Format:
@@ -166,8 +182,11 @@ WantedBy=default.target
   `--print-bpm` would produce continuous output.
 - `--list-devices` exits before any other mode (logging, tray, etc) starts.
   It's purely informational.
-- CLI flags are session-only overrides. They do not modify `config.json`.
-  Persistent setting changes require editing the config file directly.
+- Most CLI flags are session-only overrides and do not modify `config.json`.
+  The setup flags are the exception (see the two-class note up top): the
+  autostart flags write/remove the autostart entry and exit; the deferred device
+  flags save the chosen device and continue. Other persistent setting changes
+  require editing the config file directly.
 
 ### Out of scope (not in this spec)
 
@@ -179,6 +198,14 @@ WantedBy=default.target
 
 ## Done
 
+- **Autostart setup flags.** `--autostart` / `--no-autostart` (`cmdAutostart` in
+  `cli.go`, dispatched as a one-shot in `run.go` before the run path). They wrap
+  the existing platform autostart contract, so they match the tray's "Start on
+  boot" toggle. Enable overwrites silently; disable on a missing entry is a no-op
+  success (exit 0); a write/remove failure or the two flags together is exit 1.
+  First of the next CLI batch; the per-flag spec above is the reference for the
+  rest (`--device`, `--select-device`, `--auto-log`/`--no-auto-log`, `--quiet`,
+  `--log-level`).
 - **CLI / headless core.** `cli.go` adds flag parsing and the one-shot/headless
   modes; `run.go` dispatches. `--no-tray` (and `--print-bpm`, which implies it)
   run the BLE worker with no tray until SIGINT/SIGTERM, taking the instance lock

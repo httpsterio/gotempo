@@ -20,6 +20,8 @@ type cliOptions struct {
 	json        bool
 	epoch       bool
 	timestamp   bool
+	autostart   bool
+	noAutostart bool
 	config      string
 }
 
@@ -61,6 +63,8 @@ func parseFlags(args []string) (cliOptions, error) {
 	fs.BoolVar(&o.json, "json", false, "machine-readable JSON for --status / --print-bpm / --list-devices")
 	fs.BoolVar(&o.epoch, "epoch", false, "--print-bpm: timestamp as unix seconds")
 	fs.BoolVar(&o.timestamp, "timestamp", false, "--print-bpm: timestamp as RFC3339 (default: hh:mm:ss)")
+	fs.BoolVar(&o.autostart, "autostart", false, "enable launch-on-login (writes the autostart entry), then exit")
+	fs.BoolVar(&o.noAutostart, "no-autostart", false, "disable launch-on-login (removes the autostart entry), then exit")
 	fs.StringVar(&o.config, "config", "", "path to config.json (must already exist)")
 	fs.Usage = func() {
 		out := fs.Output()
@@ -77,13 +81,16 @@ func parseFlags(args []string) (cliOptions, error) {
 		line("  --timestamp", "with --print-bpm: timestamp as RFC3339 (default hh:mm:ss)")
 		line("--status", "report the running app's state, then exit")
 		line("--list-devices", "scan for HR monitors, print them, and exit")
+		fmt.Fprintln(out, "\nSetup (persist to config/disk):")
+		line("--autostart", "enable launch-on-login, then exit")
+		line("--no-autostart", "disable launch-on-login, then exit")
 		fmt.Fprintln(out, "\nOptions:")
 		line("--json", "machine-readable JSON for --status/--print-bpm/--list-devices")
 		line("--config <path>", "path to config.json (must already exist)")
 		line("--version, -v", "print version and exit")
 		fmt.Fprintln(out, "\nExit codes:")
 		fmt.Fprintln(out, "  0  clean exit / --status: running and connected")
-		fmt.Fprintln(out, "  1  config error (missing --config file, bad flags)")
+		fmt.Fprintln(out, "  1  config/setup error (missing --config file, bad flags, autostart write failed)")
 		fmt.Fprintln(out, "  2  --status: running but not connected")
 		fmt.Fprintln(out, "  3  bluetooth adapter unavailable, or --no-tray with no device")
 		fmt.Fprintln(out, "  4  --status: gotempo is not running")
@@ -93,6 +100,34 @@ func parseFlags(args []string) (cliOptions, error) {
 	}
 	o.version = o.version || vShort
 	return o, nil
+}
+
+// cmdAutostart enables or disables launch-on-login and exits. It is a setup
+// command: it writes to disk (the autostart entry) and does not start the app.
+// enableAutostart overwrites an existing entry silently; disableAutostart treats
+// a missing entry as success (rm -f). Only a real write/remove failure (e.g.
+// permissions) is an error (exit 1).
+func cmdAutostart(enable bool) int {
+	var err error
+	if enable {
+		err = enableAutostart()
+	} else {
+		err = disableAutostart()
+	}
+	if err != nil {
+		action := "enable"
+		if !enable {
+			action = "disable"
+		}
+		fmt.Fprintf(os.Stderr, "could not %s autostart: %v\n", action, err)
+		return 1
+	}
+	if enable {
+		fmt.Println("autostart enabled")
+	} else {
+		fmt.Println("autostart disabled")
+	}
+	return 0
 }
 
 // cmdListDevices scans once and prints the heart-rate monitors found. Exit 0

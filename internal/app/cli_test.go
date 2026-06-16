@@ -22,6 +22,8 @@ func TestParseFlags(t *testing.T) {
 		{"epoch", []string{"--print-bpm", "--epoch"}, cliOptions{printBPM: true, epoch: true}},
 		{"timestamp", []string{"--print-bpm", "--timestamp"}, cliOptions{printBPM: true, timestamp: true}},
 		{"config", []string{"--config", "/tmp/c.json"}, cliOptions{config: "/tmp/c.json"}},
+		{"autostart", []string{"--autostart"}, cliOptions{autostart: true}},
+		{"no-autostart", []string{"--no-autostart"}, cliOptions{noAutostart: true}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

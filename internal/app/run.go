@@ -33,6 +33,11 @@ func Run() {
 		os.Exit(1)
 	}
 
+	if opts.autostart && opts.noAutostart {
+		fmt.Fprintln(os.Stderr, "--autostart and --no-autostart are mutually exclusive")
+		os.Exit(1)
+	}
+
 	if opts.config != "" {
 		// An explicit path must exist: the user pointed somewhere specific, so
 		// silently falling back to defaults would hide a typo.
@@ -41,6 +46,12 @@ func Run() {
 			os.Exit(1)
 		}
 		configPathOverride = opts.config
+	}
+
+	// One-shot setup commands: write to disk and exit, without starting the app
+	// or taking the instance lock.
+	if opts.autostart || opts.noAutostart {
+		os.Exit(cmdAutostart(opts.autostart))
 	}
 
 	// One-shot read commands: no instance lock, no dir creation, exit when done.

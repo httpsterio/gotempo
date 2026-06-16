@@ -82,9 +82,17 @@ one-shot queries, for systems without a tray or for scripts and status bars.
 | `--timestamp` | With `--print-bpm`, render the time as RFC3339 (default is `hh:mm:ss`). |
 | `--status` | Report the running app's state and exit (see below). |
 | `--list-devices` | Scan for HR monitors, print `MAC<tab>name` per line, exit. |
+| `--autostart` | Enable launch-on-login (write the autostart entry), then exit. |
+| `--no-autostart` | Disable launch-on-login (remove the autostart entry), then exit. |
 | `--json` | Machine-readable JSON for `--status`, `--print-bpm`, `--list-devices`. |
 | `--config <path>` | Use a config file at `<path>` (must already exist). |
 | `--version`, `-v` | Print version and exit. |
+
+Most flags are *session-only* and never touch `config.json` or disk; they affect
+the single run. *Setup* flags are the exception: `--autostart`/`--no-autostart`
+(and, planned, `--device`/`--select-device`) persist a change and then exit (or,
+for the device flags, continue into a normal run). `--autostart` overwrites an
+existing entry silently; `--no-autostart` on a missing entry is a no-op success.
 
 `--print-bpm` prints one reading per line. By default the time is `hh:mm:ss`;
 `--epoch` switches it to unix seconds and `--timestamp` to RFC3339 (the two are
@@ -120,7 +128,7 @@ Exit codes:
 | Code | Meaning |
 |---|---|
 | 0 | Clean exit; `--status`: running and connected |
-| 1 | Config error (missing `--config` file, bad flags) |
+| 1 | Config/setup error (missing `--config` file, bad flags, autostart write/remove failed) |
 | 2 | `--status`: running but not connected |
 | 3 | Bluetooth adapter unavailable, or `--no-tray` with no device configured |
 | 4 | `--status`: gotempo is not running |
