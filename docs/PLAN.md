@@ -6,19 +6,17 @@ Goal: allow gotempo to run fully headless (no systray/AppIndicator) and be
 controllable via flags, for users without tray support or who want to run it
 as a service/from scripts.
 
-Core slice shipped (see Done): `--no-tray`, `--list-devices`, `--status`,
-`--print-bpm`, `--json`, `--config`, `--version`/`-v`, `--autostart`/
-`--no-autostart`. Still deferred: `--device`, `--select-device`,
+The full flag set has shipped (see Done): `--no-tray`, `--list-devices`,
+`--status`, `--print-bpm` (+`--epoch`/`--timestamp`), `--json`, `--config`,
+`--version`/`-v`, `--autostart`/`--no-autostart`, `--device`, `--select-device`,
 `--auto-log`/`--no-auto-log`, `--quiet`, `--log-level`. The per-flag specs below
-remain the reference for the deferred set; the shipped flags' specs describe
-implemented behavior.
+describe the implemented behavior.
 
 Flags fall into two classes. **Session-only** flags (everything except the
 setup flags) affect the single run and never write `config.json` or disk.
 **Setup** flags persist a change: `--autostart`/`--no-autostart` write or remove
-the autostart entry and exit; `--device`/`--select-device` (deferred) save the
-chosen device to config and then continue into a normal run respecting the other
-flags.
+the autostart entry and exit; `--device`/`--select-device` save the chosen device
+to config and then continue into a normal run respecting the other flags.
 
 ### Flags
 
@@ -32,14 +30,14 @@ Override the default config file location. If not provided, use the existing
 default path. If the file doesn't exist, error out (exit code 1) rather than
 silently using defaults, since the user explicitly pointed somewhere.
 
-#### `--device <id>`
-Connect to a specific BLE device by ID (MAC address or whatever identifier
-the BLE lib exposes), instead of showing a device picker or using the
-previously paired device from config. Useful when multiple Polar straps are
-available and you want to pick one without UI.
-
-If the specified device isn't found during scan, error out with exit code 3
-(see exit codes below).
+#### `--device <mac>` (shipped)
+Setup flag. Sets the current device by MAC in `config.json`, then continues into
+a normal run (respecting other flags like `--no-tray`). Accepts a MAC only — case
+and `:`/`-` separators are normalized (`normalizeMAC`); anything that isn't a MAC
+(an index, a typo) is rejected with exit 1 before config is touched. An unknown
+MAC is added to the known list with a blank name (it backfills on first connect);
+no scan is run just to resolve the name. Index selection lives only in
+`--select-device`, where the numbering is stable within one scan.
 
 #### `--list-devices`
 Scan for available BLE heart rate devices, print them (one per line: ID and
@@ -57,12 +55,23 @@ no-op success (exit 0, like `rm -f`). Only a real write/remove failure (e.g.
 permissions) is an error (exit 1). The two together is a bad combination
 (exit 1). The entry always launches the tray with no flags.
 
-#### `--auto-log` / `--no-auto-log`
-Override the `auto_log` setting for this run only. Does not modify `config.json`.
-Default is the config value, except headless (`--no-tray`) defaults `auto_log`
-on (a headless instance that connects but never logs is useless); `--no-auto-log`
-turns it back off. `--print-bpm` does **not** force logging on (printing is the
-output there).
+#### `--select-device` (shipped)
+Setup flag, interactive. Lists the known devices first as a numbered list, with
+`s` to scan on demand and `q` to cancel; picking a known device skips the scan
+entirely. A scan merges its results with the known list (dedup by MAC), then the
+user picks by number. The selection is saved as current in `config.json` and the
+run continues. Needs an interactive terminal: if stdin is not a tty (piped,
+redirected, under a service) it exits 1 rather than blocking. Cancelling exits 1.
+Mutually exclusive with `--device` (both → exit 1).
+
+#### `--auto-log` / `--no-auto-log` (shipped)
+Session-only override of `auto_log`; never written to `config.json`
+(`cliOptions.effectiveAutoLog`). Base is the config value, except a headless run
+(`--no-tray`, but not a bare `--print-bpm`) defaults logging on so a service
+records; `--no-auto-log` opts back out. The explicit flags win over the headless
+default either way. `--print-bpm` alone does **not** force logging (printing is
+the output); pair it with `--auto-log` to do both. The two flags together →
+exit 1.
 
 #### `--print-bpm [--epoch | --timestamp]`
 Print each BPM reading to stdout, one per line, as it's received. Format:
@@ -115,23 +124,23 @@ Intended for status bar widgets (waybar, polybar) polling alongside the tray or
 different operation and would get its own flag (e.g. `--read`); deliberately not
 folded into `--status`.
 
-#### `--quiet`
-Suppress all stdout/stderr output except errors. Errors still print to
-stderr and still produce the appropriate exit code. Does not suppress
-`--print-bpm` or `--status` output, those are explicit output requests, not
-logging.
+#### `--quiet` (shipped)
+Errors only: same as `--log-level error`. Suppresses the info/lifecycle lines on
+stderr; errors still print and the exit code is unchanged. It does not suppress
+`--print-bpm` or `--status` output (those are explicit data requests, not
+logging). When combined with `--log-level`, `--quiet` wins.
 
-#### `--log-level error|info|debug`
-Controls verbosity of operational logging to stderr. Default: `info`.
+#### `--log-level error|info|debug` (shipped)
+Controls operational logging verbosity to stderr (`log.go`, gated by
+`currentLogLevel`). Default `info`; an unrecognized value exits 1.
 
-- `error`: only errors (connection failures, file write errors, etc)
-- `info`: error + lifecycle events (connected, session started/ended,
-  config loaded)
-- `debug`: info + per-reading detail (every BPM value received, gap timer
-  state, etc) — useful for debugging the session-splitting logic
+- `error`: only failures (connect failures, file/status write errors)
+- `info`: error + lifecycle events (adapter, connect/scan, session start/end,
+  device, switching)
+- `debug`: info + per-reading detail (`[BPM] reading N` in `handleBPM`)
 
-`--quiet` is equivalent to `--log-level error` plus suppressing the info
-banner on startup, if any.
+The leveled helpers (`logErrf`/`logInfof`/`logDebugf`, plus `…ln` variants)
+replace the bare `log.*` calls package-wide; error logs always print.
 
 ### Exit codes
 
@@ -198,14 +207,31 @@ WantedBy=default.target
 
 ## Done
 
+- **CLI batch 2: device, auto-log, logging.** Completes the flag set on top of
+  the autostart flags.
+  - `--device <mac>` / `--select-device` (`device.go`): setup flags that set the
+    current device in config then continue the run. `--device` validates a MAC
+    (`normalizeMAC` canonicalizes case and `:`/`-`; non-MAC → exit 1 before
+    touching config) and upserts it with a blank name. `--select-device` is the
+    interactive picker — known devices first, on-demand scan (`s`), cancel (`q`);
+    refuses a non-tty (exit 1) and a cancel (exit 1). The two are mutually
+    exclusive (exit 1). Wiring in `cmdRun` via `applySetupDevice`.
+  - `--auto-log` / `--no-auto-log` (`cliOptions.effectiveAutoLog`): session-only
+    override, never persisted. Headless (`--no-tray`, not a bare `--print-bpm`)
+    defaults logging on; `--no-auto-log` opts out; explicit flags win; the two
+    together → exit 1. Applied in `cmdRun` via `setLogging` before the worker.
+  - `--quiet` / `--log-level error|info|debug` (`log.go`): leveled logging. The
+    bare `log.*` calls package-wide became `logErrf`/`logInfof`/`logDebugf`
+    (+`…ln`); errors always print, info is lifecycle, debug adds `[BPM] reading N`.
+    Default info; `--quiet` == error and wins over `--log-level`; bad level →
+    exit 1. Resolved at the top of `Run` before anything logs. Tests in
+    `cli_test.go` (`effectiveAutoLog`, parse cases) and `log_test.go`
+    (`parseLogLevel`, level gating).
 - **Autostart setup flags.** `--autostart` / `--no-autostart` (`cmdAutostart` in
   `cli.go`, dispatched as a one-shot in `run.go` before the run path). They wrap
   the existing platform autostart contract, so they match the tray's "Start on
   boot" toggle. Enable overwrites silently; disable on a missing entry is a no-op
   success (exit 0); a write/remove failure or the two flags together is exit 1.
-  First of the next CLI batch; the per-flag spec above is the reference for the
-  rest (`--device`, `--select-device`, `--auto-log`/`--no-auto-log`, `--quiet`,
-  `--log-level`).
 - **CLI / headless core.** `cli.go` adds flag parsing and the one-shot/headless
   modes; `run.go` dispatches. `--no-tray` (and `--print-bpm`, which implies it)
   run the BLE worker with no tray until SIGINT/SIGTERM, taking the instance lock

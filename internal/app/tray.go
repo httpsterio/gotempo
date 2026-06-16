@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -206,13 +205,13 @@ func (t *tray) loop(autoScan bool) {
 		case <-t.mAutostart.ClickedCh:
 			if t.mAutostart.Checked() {
 				if err := disableAutostart(); err != nil {
-					log.Printf("[autostart] disable failed: %v", err)
+					logErrf("[autostart] disable failed: %v", err)
 				} else {
 					t.mAutostart.Uncheck()
 				}
 			} else {
 				if err := enableAutostart(); err != nil {
-					log.Printf("[autostart] enable failed: %v", err)
+					logErrf("[autostart] enable failed: %v", err)
 				} else {
 					t.mAutostart.Check()
 				}

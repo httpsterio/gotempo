@@ -24,6 +24,10 @@ func TestParseFlags(t *testing.T) {
 		{"config", []string{"--config", "/tmp/c.json"}, cliOptions{config: "/tmp/c.json"}},
 		{"autostart", []string{"--autostart"}, cliOptions{autostart: true}},
 		{"no-autostart", []string{"--no-autostart"}, cliOptions{noAutostart: true}},
+		{"device", []string{"--device", "24:AC:AC:18:41:CC"}, cliOptions{device: "24:AC:AC:18:41:CC"}},
+		{"select-device", []string{"--select-device"}, cliOptions{selectDev: true}},
+		{"auto-log", []string{"--auto-log"}, cliOptions{autoLog: true}},
+		{"no-auto-log", []string{"--no-auto-log"}, cliOptions{noAutoLog: true}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -48,6 +52,32 @@ func TestFormatTS(t *testing.T) {
 	}
 	if got := formatTS(tm, tsFull); got != "2026-06-16T01:02:03Z" {
 		t.Errorf("tsFull = %q, want RFC3339", got)
+	}
+}
+
+func TestEffectiveAutoLog(t *testing.T) {
+	cases := []struct {
+		name       string
+		opts       cliOptions
+		cfgAutoLog bool
+		want       bool
+	}{
+		{"tray, config off", cliOptions{}, false, false},
+		{"tray, config on", cliOptions{}, true, true},
+		{"headless defaults on", cliOptions{noTray: true}, false, true},
+		{"print-bpm does not force", cliOptions{printBPM: true}, false, false},
+		{"no-tray print-bpm does not force", cliOptions{noTray: true, printBPM: true}, false, false},
+		{"no-auto-log wins over headless", cliOptions{noTray: true, noAutoLog: true}, false, false},
+		{"auto-log forces on in tray", cliOptions{autoLog: true}, false, true},
+		{"auto-log forces on with print-bpm", cliOptions{printBPM: true, autoLog: true}, false, true},
+		{"no-auto-log wins over config on", cliOptions{noAutoLog: true}, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.opts.effectiveAutoLog(c.cfgAutoLog); got != c.want {
+				t.Errorf("effectiveAutoLog(%+v, cfg=%v) = %v, want %v", c.opts, c.cfgAutoLog, got, c.want)
+			}
+		})
 	}
 }
 

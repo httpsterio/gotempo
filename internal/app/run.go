@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -23,6 +22,22 @@ func Run() {
 		os.Exit(1) // bad flag: config error
 	}
 
+	// Resolve stderr verbosity before anything logs. --quiet forces error level
+	// (it wins over --log-level); an empty --log-level keeps the info default.
+	level := logInfo
+	if opts.logLevel != "" {
+		l, ok := parseLogLevel(opts.logLevel)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "invalid --log-level %q (want error|info|debug)\n", opts.logLevel)
+			os.Exit(1)
+		}
+		level = l
+	}
+	if opts.quiet {
+		level = logError
+	}
+	setLogLevel(level)
+
 	if opts.version {
 		fmt.Println("gotempo " + version)
 		return
@@ -35,6 +50,16 @@ func Run() {
 
 	if opts.autostart && opts.noAutostart {
 		fmt.Fprintln(os.Stderr, "--autostart and --no-autostart are mutually exclusive")
+		os.Exit(1)
+	}
+
+	if opts.device != "" && opts.selectDev {
+		fmt.Fprintln(os.Stderr, "--device and --select-device are mutually exclusive")
+		os.Exit(1)
+	}
+
+	if opts.autoLog && opts.noAutoLog {
+		fmt.Fprintln(os.Stderr, "--auto-log and --no-auto-log are mutually exclusive")
 		os.Exit(1)
 	}
 
@@ -71,7 +96,7 @@ func Run() {
 func cmdRun(opts cliOptions) int {
 	release, ok := acquireInstanceLock()
 	if !ok {
-		log.Println("gotempo is already running; exiting")
+		logInfoln("gotempo is already running; exiting")
 		return 0
 	}
 	if release != nil {
@@ -79,27 +104,43 @@ func cmdRun(opts cliOptions) int {
 	}
 
 	if err := os.MkdirAll(filepath.Dir(configPath()), 0755); err != nil {
-		log.Println("could not create config directory:", err)
+		logErrln("could not create config directory:", err)
 	}
 	if err := os.MkdirAll(dataDir(), 0755); err != nil {
-		log.Println("could not create data directory:", err)
+		logErrln("could not create data directory:", err)
 	}
 
 	cfg, changed := loadConfig()
+	app := newApp(cfg)
+
+	// Setup flags --device / --select-device set the current device, then the run
+	// continues. A failure (bad MAC, no terminal, cancelled) stops here.
+	exit, devChanged, proceed := app.applySetupDevice(opts)
+	if !proceed {
+		return exit
+	}
+	changed = changed || devChanged
+
 	if changed {
-		// First run (no file) or a config that was missing keys / had invalid
-		// values: write the validated, complete form back so it self-documents.
-		if err := saveConfig(*cfg); err != nil {
-			log.Println("could not write config:", err)
+		// First run (no file), a config that was missing keys / had invalid
+		// values, or a device just set: write the validated, complete form back so
+		// it self-documents.
+		if err := saveConfig(app.snapshotConfig()); err != nil {
+			logErrln("could not write config:", err)
 		}
 	}
 	if cfg.Current == "" {
-		log.Println("no device configured — pick one from the tray ‘Devices’ menu")
+		logInfoln("no device configured — pick one from the tray ‘Devices’ menu")
 	} else {
-		log.Printf("using device: %s", cfg.Current)
+		logInfof("using device: %s", cfg.Current)
 	}
 
-	app := newApp(cfg)
+	// Apply the session-only logging override (config value, with headless
+	// defaulting on and --auto-log/--no-auto-log winning). Not persisted.
+	cfgAutoLog := app.snapshotConfig().AutoLog
+	if al := opts.effectiveAutoLog(cfgAutoLog); al != cfgAutoLog {
+		app.setLogging(al)
+	}
 
 	// Publish a fresh status for this run before the BLE worker starts, so a
 	// --status racing startup can't read a previous run's leftover status.json
@@ -110,7 +151,7 @@ func cmdRun(opts cliOptions) int {
 	// Probe for an adapter, but don't fail if Bluetooth is currently off — the
 	// worker keeps retrying once it comes back.
 	if _, err := app.ensureAdapter(); err != nil {
-		log.Println("bluetooth adapter not ready (will keep retrying):", err)
+		logInfoln("bluetooth adapter not ready (will keep retrying):", err)
 	}
 
 	if opts.headless() {
@@ -125,7 +166,7 @@ func cmdRun(opts cliOptions) int {
 // picker, so a missing device is a hard error (exit 3) rather than an idle wait.
 func (a *App) runHeadless(opts cliOptions) int {
 	if a.currentMAC() == "" {
-		log.Println("no device configured; set one in config.json (headless mode has no picker)")
+		logErrln("no device configured; set one in config.json (headless mode has no picker)")
 		return 3
 	}
 

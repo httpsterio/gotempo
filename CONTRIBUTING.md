@@ -31,6 +31,8 @@ lives in one `internal/app` package, split by concern:
 |---|---|
 | `run.go` | startup, flag dispatch, tray and headless run loops |
 | `cli.go` | flag parsing, the one-shot/headless commands, output formatting |
+| `device.go` | `--device`/`--select-device`: MAC validation and the interactive picker |
+| `log.go` | leveled logging (`--log-level`/`--quiet`) |
 | `assets.go` | embedded icons (`assets/`), build-stamped `version` |
 | `config.go` | config load/save, `configDir` (portable) |
 | `state.go` | `AppState`, the BPM-file lifecycle, and the `status.json` publisher |

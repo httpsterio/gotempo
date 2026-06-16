@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -136,7 +135,7 @@ func (s *SessionLogger) openSession(t time.Time) error {
 		}
 		s.currentFile = f
 		s.lastValid = last
-		log.Printf("[CSV] resuming session %s", filepath.Base(path))
+		logInfof("[CSV] resuming session %s", filepath.Base(path))
 		return nil
 	}
 	name := t.Format("2006-01-02T15-04-05") + ".csv"
@@ -149,7 +148,7 @@ func (s *SessionLogger) openSession(t time.Time) error {
 		return err
 	}
 	s.currentFile = f
-	log.Printf("[CSV] new session %s", name)
+	logInfof("[CSV] new session %s", name)
 	return nil
 }
 

@@ -22,6 +22,12 @@ type cliOptions struct {
 	timestamp   bool
 	autostart   bool
 	noAutostart bool
+	selectDev   bool
+	autoLog     bool
+	noAutoLog   bool
+	quiet       bool
+	device      string
+	logLevel    string
 	config      string
 }
 
@@ -29,6 +35,25 @@ type cliOptions struct {
 // readings to stdout implies a foreground/headless process, so --print-bpm
 // forces it too.
 func (o cliOptions) headless() bool { return o.noTray || o.printBPM }
+
+// effectiveAutoLog decides whether session logging starts on for this run. It is
+// session-only and never written back to config. The base is the config value;
+// a headless run (--no-tray, but not a bare --print-bpm, where printing is the
+// point) defaults logging on so a service actually records; the explicit
+// --auto-log / --no-auto-log flags override either way.
+func (o cliOptions) effectiveAutoLog(cfgAutoLog bool) bool {
+	v := cfgAutoLog
+	if o.noTray && !o.printBPM {
+		v = true
+	}
+	if o.autoLog {
+		v = true
+	}
+	if o.noAutoLog {
+		v = false
+	}
+	return v
+}
 
 // tsMode is how --print-bpm renders each reading's time.
 type tsMode int
@@ -65,6 +90,12 @@ func parseFlags(args []string) (cliOptions, error) {
 	fs.BoolVar(&o.timestamp, "timestamp", false, "--print-bpm: timestamp as RFC3339 (default: hh:mm:ss)")
 	fs.BoolVar(&o.autostart, "autostart", false, "enable launch-on-login (writes the autostart entry), then exit")
 	fs.BoolVar(&o.noAutostart, "no-autostart", false, "disable launch-on-login (removes the autostart entry), then exit")
+	fs.StringVar(&o.device, "device", "", "set the current device by MAC in config, then run")
+	fs.BoolVar(&o.selectDev, "select-device", false, "interactively pick the current device, then run")
+	fs.BoolVar(&o.autoLog, "auto-log", false, "force session logging on for this run (overrides config)")
+	fs.BoolVar(&o.noAutoLog, "no-auto-log", false, "force session logging off for this run (overrides config)")
+	fs.BoolVar(&o.quiet, "quiet", false, "suppress info logging (errors only); same as --log-level error")
+	fs.StringVar(&o.logLevel, "log-level", "", "stderr verbosity: error|info|debug (default info)")
 	fs.StringVar(&o.config, "config", "", "path to config.json (must already exist)")
 	fs.Usage = func() {
 		out := fs.Output()
@@ -84,13 +115,19 @@ func parseFlags(args []string) (cliOptions, error) {
 		fmt.Fprintln(out, "\nSetup (persist to config/disk):")
 		line("--autostart", "enable launch-on-login, then exit")
 		line("--no-autostart", "disable launch-on-login, then exit")
+		line("--device <mac>", "set the current device by MAC, then run")
+		line("--select-device", "interactively pick the current device, then run")
 		fmt.Fprintln(out, "\nOptions:")
+		line("--auto-log", "force session logging on for this run")
+		line("--no-auto-log", "force session logging off for this run")
+		line("--log-level <lvl>", "stderr verbosity: error|info|debug (default info)")
+		line("--quiet", "errors only; same as --log-level error")
 		line("--json", "machine-readable JSON for --status/--print-bpm/--list-devices")
 		line("--config <path>", "path to config.json (must already exist)")
 		line("--version, -v", "print version and exit")
 		fmt.Fprintln(out, "\nExit codes:")
 		fmt.Fprintln(out, "  0  clean exit / --status: running and connected")
-		fmt.Fprintln(out, "  1  config/setup error (missing --config file, bad flags, autostart write failed)")
+		fmt.Fprintln(out, "  1  config/setup error (bad flags or value, missing --config, setup write failed)")
 		fmt.Fprintln(out, "  2  --status: running but not connected")
 		fmt.Fprintln(out, "  3  bluetooth adapter unavailable, or --no-tray with no device")
 		fmt.Fprintln(out, "  4  --status: gotempo is not running")

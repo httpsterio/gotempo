@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,7 +57,7 @@ func openLogFolder() {
 			return
 		}
 	}
-	log.Printf("[logs] could not open %s: no working file-manager opener found", dir)
+	logErrf("[logs] could not open %s: no working file-manager opener found", dir)
 }
 
 func autostartPath() string {

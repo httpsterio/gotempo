@@ -84,15 +84,37 @@ one-shot queries, for systems without a tray or for scripts and status bars.
 | `--list-devices` | Scan for HR monitors, print `MAC<tab>name` per line, exit. |
 | `--autostart` | Enable launch-on-login (write the autostart entry), then exit. |
 | `--no-autostart` | Disable launch-on-login (remove the autostart entry), then exit. |
+| `--device <mac>` | Set the current device by MAC in `config.json`, then run. |
+| `--select-device` | Interactively pick the current device, then run (needs a terminal). |
+| `--auto-log` | Force session logging on for this run (overrides config). |
+| `--no-auto-log` | Force session logging off for this run (overrides config). |
+| `--log-level <lvl>` | stderr verbosity: `error`, `info` (default), or `debug`. |
+| `--quiet` | Errors only; same as `--log-level error`. |
 | `--json` | Machine-readable JSON for `--status`, `--print-bpm`, `--list-devices`. |
 | `--config <path>` | Use a config file at `<path>` (must already exist). |
 | `--version`, `-v` | Print version and exit. |
 
 Most flags are *session-only* and never touch `config.json` or disk; they affect
-the single run. *Setup* flags are the exception: `--autostart`/`--no-autostart`
-(and, planned, `--device`/`--select-device`) persist a change and then exit (or,
-for the device flags, continue into a normal run). `--autostart` overwrites an
+the single run (the `--auto-log`/`--no-auto-log` and logging flags included).
+*Setup* flags are the exception: `--autostart`/`--no-autostart` persist a change
+and then exit; `--device`/`--select-device` set the current device in
+`config.json` and then continue into a normal run. `--autostart` overwrites an
 existing entry silently; `--no-autostart` on a missing entry is a no-op success.
+
+`--device` takes a MAC address (case and `:`/`-` separators are normalized) and
+rejects anything that isn't one. `--select-device` lists the known devices first
+and offers an on-demand scan (`s`); picking a known device skips scanning. It
+needs an interactive terminal and exits non-zero if run without one.
+
+Both start a run, so they take the single-instance lock: if a gotempo is already
+running they print "already running" and exit without changing the device. To
+switch devices, quit the running instance first (or use the tray's `Devices`
+menu, which switches live).
+
+Session logging defaults on for a headless run (`--no-tray`) so a service
+actually records; `--no-auto-log` opts out. A bare `--print-bpm` does not enable
+logging on its own (printing is the output); combine it with `--auto-log` to do
+both.
 
 `--print-bpm` prints one reading per line. By default the time is `hh:mm:ss`;
 `--epoch` switches it to unix seconds and `--timestamp` to RFC3339 (the two are
@@ -128,7 +150,7 @@ Exit codes:
 | Code | Meaning |
 |---|---|
 | 0 | Clean exit; `--status`: running and connected |
-| 1 | Config/setup error (missing `--config` file, bad flags, autostart write/remove failed) |
+| 1 | Config/setup error (bad flag or value, missing `--config`, invalid `--device` MAC, `--select-device` without a terminal, setup write/remove failed) |
 | 2 | `--status`: running but not connected |
 | 3 | Bluetooth adapter unavailable, or `--no-tray` with no device configured |
 | 4 | `--status`: gotempo is not running |

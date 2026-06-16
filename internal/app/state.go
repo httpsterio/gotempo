@@ -2,7 +2,6 @@ package app
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"sync"
 	"time"
@@ -44,29 +43,29 @@ func writeStatus(st appStatus) {
 	st.Updated = time.Now().Format(time.RFC3339)
 	data, err := json.Marshal(st)
 	if err != nil {
-		log.Printf("[status] marshal: %v", err)
+		logErrf("[status] marshal: %v", err)
 		return
 	}
 	tmp, err := os.CreateTemp(dataDir(), "status-*.tmp")
 	if err != nil {
-		log.Printf("[status] create temp: %v", err)
+		logErrf("[status] create temp: %v", err)
 		return
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		log.Printf("[status] write: %v", err)
+		logErrf("[status] write: %v", err)
 		return
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
-		log.Printf("[status] close: %v", err)
+		logErrf("[status] close: %v", err)
 		return
 	}
 	if err := os.Rename(tmpName, statusPath()); err != nil {
 		os.Remove(tmpName)
-		log.Printf("[status] rename: %v", err)
+		logErrf("[status] rename: %v", err)
 	}
 }
 
@@ -147,7 +146,7 @@ func (s *AppState) onDisconnect() {
 		}
 		s.hasBPM = false
 		if err := os.WriteFile(outputPath(), []byte{}, 0644); err != nil {
-			log.Printf("[BPM] could not clear output: %v", err)
+			logErrf("[BPM] could not clear output: %v", err)
 		}
 	})
 	s.mu.Unlock()
@@ -163,6 +162,6 @@ func (s *AppState) onSwitch() {
 	}
 	s.mu.Unlock()
 	if err := os.WriteFile(outputPath(), []byte{}, 0644); err != nil {
-		log.Printf("[BPM] could not clear output: %v", err)
+		logErrf("[BPM] could not clear output: %v", err)
 	}
 }

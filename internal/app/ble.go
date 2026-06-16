@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -201,7 +200,7 @@ func (a *App) setAutoLog(v bool) {
 	snap := a.cfg.clone()
 	a.cfgMu.Unlock()
 	if err := saveConfig(snap); err != nil {
-		log.Printf("config save: %v", err)
+		logErrf("config save: %v", err)
 	}
 }
 
@@ -224,9 +223,9 @@ func (a *App) ensureAdapter() (*bluetooth.Adapter, error) {
 		return nil, err
 	}
 	if a.adapter == nil {
-		log.Printf("[BLE] using adapter %s", label)
+		logInfof("[BLE] using adapter %s", label)
 	} else {
-		log.Printf("[BLE] adapter changed to %s", label)
+		logInfof("[BLE] adapter changed to %s", label)
 	}
 	a.adapter = cand
 	return cand, nil
@@ -267,14 +266,14 @@ func (a *App) switchTo(mac, name string) {
 	snap := a.cfg.clone()
 	a.cfgMu.Unlock()
 	if err := saveConfig(snap); err != nil {
-		log.Printf("config save: %v", err)
+		logErrf("config save: %v", err)
 	}
 
 	a.state.onSwitch()
 	a.setPhase(phaseConnecting) // new device; worker will reconnect
 	a.signalSwitch()
 	a.signalUI()
-	log.Printf("[BLE] switching to %s (%s)", name, mac)
+	logInfof("[BLE] switching to %s (%s)", name, mac)
 }
 
 // markConnected records a successful connection's timestamp and persists it.
@@ -284,12 +283,13 @@ func (a *App) markConnected(mac string) {
 	snap := a.cfg.clone()
 	a.cfgMu.Unlock()
 	if err := saveConfig(snap); err != nil {
-		log.Printf("config save: %v", err)
+		logErrf("config save: %v", err)
 	}
 }
 
 func (a *App) handleBPM(bpm int) {
 	now := time.Now()
+	logDebugf("[BPM] reading %d", bpm)
 
 	// Raw output stream (--print-bpm): every reading as received, independent of
 	// the logging toggle and junk filter.
@@ -311,7 +311,7 @@ func (a *App) handleBPM(bpm int) {
 	// CSV session log: every valid reading at full cadence (no dedup), so the
 	// file keeps a row per second. Junk is filtered inside LogReading.
 	if err := a.session.LogReading(now, bpm); err != nil {
-		log.Printf("[CSV] %v", err)
+		logErrf("[CSV] %v", err)
 	}
 
 	// OBS overlay file: deduped to the last distinct value, with its own
@@ -326,7 +326,7 @@ func (a *App) handleBPM(bpm int) {
 	a.state.mu.Unlock()
 
 	if err := os.WriteFile(outputPath(), []byte(strconv.Itoa(bpm)), 0644); err != nil {
-		log.Printf("[BPM] could not write output: %v", err)
+		logErrf("[BPM] could not write output: %v", err)
 	}
 }
 
@@ -340,7 +340,7 @@ func (a *App) scanDevices(d time.Duration) []KnownDevice {
 
 	adapter, err := a.ensureAdapter()
 	if err != nil {
-		log.Println("[BLE] scan skipped:", err)
+		logErrln("[BLE] scan skipped:", err)
 		return nil
 	}
 
@@ -360,7 +360,7 @@ func (a *App) scanDevices(d time.Duration) []KnownDevice {
 		}
 		seen[mac] = KnownDevice{MAC: mac, Name: r.LocalName()}
 	}); err != nil {
-		log.Println("[BLE] scan error:", err)
+		logErrln("[BLE] scan error:", err)
 	}
 
 	out := make([]KnownDevice, 0, len(seen))
@@ -379,7 +379,7 @@ func (a *App) findDevice(target string, d time.Duration) (*bluetooth.Adapter, bo
 
 	adapter, err := a.ensureAdapter()
 	if err != nil {
-		log.Println("[BLE] scan skipped:", err)
+		logErrln("[BLE] scan skipped:", err)
 		return nil, false
 	}
 
@@ -399,7 +399,7 @@ func (a *App) findDevice(target string, d time.Duration) (*bluetooth.Adapter, bo
 			stop()
 		}
 	}); err != nil {
-		log.Println("[BLE] scan error:", err)
+		logErrln("[BLE] scan error:", err)
 		return adapter, found
 	}
 	return adapter, found
@@ -441,7 +441,7 @@ func (a *App) runBLE() {
 		}
 		parsed, err := bluetooth.ParseMAC(mac)
 		if err != nil {
-			log.Println("[BLE] invalid mac:", err)
+			logErrln("[BLE] invalid mac:", err)
 			select {
 			case <-a.stop:
 				return
@@ -494,7 +494,7 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 				notifiedLoss = false
 				a.state.onDisconnect()
 			} else {
-				log.Printf("[BLE] connect failed: %s", describeConnectErr(err))
+				logErrf("[BLE] connect failed: %s", describeConnectErr(err))
 				attempt++
 			}
 			a.signalUI()
@@ -527,7 +527,7 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 // or a raw connect/discovery error.
 func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 	a.setPhase(phaseConnecting)
-	log.Printf("[BLE] scanning for %s…", addr.MAC.String())
+	logInfof("[BLE] scanning for %s…", addr.MAC.String())
 	adapter, ok := a.findDevice(addr.MAC.String(), connectScanTimeout)
 	if adapter == nil {
 		return errors.New("no bluetooth adapter available")
@@ -555,12 +555,12 @@ func (a *App) persistScan(target string) (*bluetooth.Adapter, error) {
 		}
 
 		if time.Since(lastLog) >= persistScanLogInterval {
-			log.Printf("[BLE] still scanning for %s (%s elapsed)", target, time.Since(start).Round(time.Second))
+			logInfof("[BLE] still scanning for %s (%s elapsed)", target, time.Since(start).Round(time.Second))
 			lastLog = time.Now()
 		}
 
 		if adapter, found := a.findDevice(target, connectScanTimeout); found {
-			log.Printf("[BLE] %s back in range after %s", target, time.Since(start).Round(time.Second))
+			logInfof("[BLE] %s back in range after %s", target, time.Since(start).Round(time.Second))
 			return adapter, nil
 		}
 
@@ -597,7 +597,7 @@ func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error 
 		} else if err != nil {
 			// A connect/discovery error here was previously swallowed, leaving
 			// the persistent phase silent. Surface it before rescanning.
-			log.Printf("[BLE] connect failed: %s", describeConnectErr(err))
+			logErrf("[BLE] connect failed: %s", describeConnectErr(err))
 		}
 	}
 }
@@ -607,7 +607,7 @@ func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error 
 // session ends or the app stops/switches. It always returns a sentinel error:
 // errStopped, errSwitched, errSessionDropped, or a raw connect/discovery error.
 func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Address, wasNotified bool) error {
-	log.Printf("[BLE] connecting to %s…", addr.MAC.String())
+	logInfof("[BLE] connecting to %s…", addr.MAC.String())
 	device, err := adapter.Connect(addr, bluetooth.ConnectionParams{})
 	if err != nil {
 		return err
@@ -653,7 +653,7 @@ func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Addre
 		return err
 	}
 
-	log.Println("[BLE] connected")
+	logInfoln("[BLE] connected")
 	connectedAt := time.Now()
 	a.state.onConnect()
 	a.setPhase(phaseConnected)
@@ -682,7 +682,7 @@ func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Addre
 			connected, err := device.Connected()
 			if err != nil || !connected {
 				cleanup()
-				log.Printf("[BLE] session ended after %s; reconnecting", time.Since(connectedAt).Round(time.Second))
+				logInfof("[BLE] session ended after %s; reconnecting", time.Since(connectedAt).Round(time.Second))
 				return errSessionDropped
 			}
 		}
