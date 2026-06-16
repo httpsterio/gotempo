@@ -155,6 +155,16 @@ func (s *AppState) onDisconnect() {
 func (s *AppState) onSwitch() {
 	s.mu.Lock()
 	s.connected = false
+	s.mu.Unlock()
+	s.clearOutput()
+}
+
+// clearOutput empties the OBS BPM file and resets the dedup/stale state, without
+// changing the connection flag. Used on device switch and when logging is turned
+// off, so the overlay goes blank immediately instead of freezing on the last
+// value.
+func (s *AppState) clearOutput() {
+	s.mu.Lock()
 	s.hasBPM = false
 	if s.staleTimer != nil {
 		s.staleTimer.Stop()

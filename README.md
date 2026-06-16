@@ -111,10 +111,11 @@ running they print "already running" and exit without changing the device. To
 switch devices, quit the running instance first (or use the tray's `Devices`
 menu, which switches live).
 
-Session logging defaults on for a headless run (`--no-tray`) so a service
-actually records; `--no-auto-log` opts out. A bare `--print-bpm` does not enable
-logging on its own (printing is the output); combine it with `--auto-log` to do
-both.
+`--no-tray` is the "run as a daemon" signal, so it defaults session logging on
+(a service that connects but never records is useless); `--no-auto-log` opts out.
+`--print-bpm` is additive, not a mode switch: `--no-tray --print-bpm` both logs
+and streams. A *bare* `--print-bpm` (without `--no-tray`) does not enable logging
+on its own; add `--auto-log` if you want it to log too.
 
 `--print-bpm` prints one reading per line. By default the time is `hh:mm:ss`;
 `--epoch` switches it to unix seconds and `--timestamp` to RFC3339 (the two are

@@ -66,7 +66,7 @@ func TestEffectiveAutoLog(t *testing.T) {
 		{"tray, config on", cliOptions{}, true, true},
 		{"headless defaults on", cliOptions{noTray: true}, false, true},
 		{"print-bpm does not force", cliOptions{printBPM: true}, false, false},
-		{"no-tray print-bpm does not force", cliOptions{noTray: true, printBPM: true}, false, false},
+		{"no-tray print-bpm logs (no-tray wins)", cliOptions{noTray: true, printBPM: true}, false, true},
 		{"no-auto-log wins over headless", cliOptions{noTray: true, noAutoLog: true}, false, false},
 		{"auto-log forces on in tray", cliOptions{autoLog: true}, false, true},
 		{"auto-log forces on with print-bpm", cliOptions{printBPM: true, autoLog: true}, false, true},

@@ -66,12 +66,12 @@ Mutually exclusive with `--device` (both → exit 1).
 
 #### `--auto-log` / `--no-auto-log` (shipped)
 Session-only override of `auto_log`; never written to `config.json`
-(`cliOptions.effectiveAutoLog`). Base is the config value, except a headless run
-(`--no-tray`, but not a bare `--print-bpm`) defaults logging on so a service
-records; `--no-auto-log` opts back out. The explicit flags win over the headless
-default either way. `--print-bpm` alone does **not** force logging (printing is
-the output); pair it with `--auto-log` to do both. The two flags together →
-exit 1.
+(`cliOptions.effectiveAutoLog`). Base is the config value. `--no-tray` is the
+explicit daemon signal, so it defaults logging on (even with `--print-bpm`, which
+is additive — "also stream", not "watch-only"); `--no-auto-log` opts back out. A
+bare `--print-bpm` (without `--no-tray`) does **not** enable logging; pair it with
+`--auto-log` for that. The explicit flags win over the headless default either
+way. The two flags together → exit 1.
 
 #### `--print-bpm [--epoch | --timestamp]`
 Print each BPM reading to stdout, one per line, as it's received. Format:
@@ -217,9 +217,10 @@ WantedBy=default.target
     refuses a non-tty (exit 1) and a cancel (exit 1). The two are mutually
     exclusive (exit 1). Wiring in `cmdRun` via `applySetupDevice`.
   - `--auto-log` / `--no-auto-log` (`cliOptions.effectiveAutoLog`): session-only
-    override, never persisted. Headless (`--no-tray`, not a bare `--print-bpm`)
-    defaults logging on; `--no-auto-log` opts out; explicit flags win; the two
-    together → exit 1. Applied in `cmdRun` via `setLogging` before the worker.
+    override, never persisted. `--no-tray` (the daemon signal) defaults logging on
+    — including with `--print-bpm`, which is additive; a bare `--print-bpm` does
+    not. `--no-auto-log` opts out; explicit flags win; the two together → exit 1.
+    Applied in `cmdRun` via `setLogging` before the worker.
   - `--quiet` / `--log-level error|info|debug` (`log.go`): leveled logging. The
     bare `log.*` calls package-wide became `logErrf`/`logInfof`/`logDebugf`
     (+`…ln`); errors always print, info is lifecycle, debug adds `[BPM] reading N`.

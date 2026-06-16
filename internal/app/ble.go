@@ -122,11 +122,15 @@ func newApp(cfg *Config) *App {
 // setLogging toggles BPM logging. setEnabled closes the CSV session on off and
 // gates LogReading under the session mutex, so a reading racing the toggle can't
 // reopen a session after it; turning it on lets the next valid reading open or
-// resume one per the gap rule. The OBS overlay file is handled separately in
-// handleBPM.
+// resume one per the gap rule. Turning it off also clears the OBS overlay file
+// at once, so it doesn't freeze on the last value (handleBPM only writes it while
+// logging is on).
 func (a *App) setLogging(v bool) {
 	a.state.setLogging(v)
 	a.session.setEnabled(v)
+	if !v {
+		a.state.clearOutput()
+	}
 	a.publishStatus() // reflect the new logging state at once
 }
 

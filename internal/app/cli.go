@@ -38,12 +38,13 @@ func (o cliOptions) headless() bool { return o.noTray || o.printBPM }
 
 // effectiveAutoLog decides whether session logging starts on for this run. It is
 // session-only and never written back to config. The base is the config value;
-// a headless run (--no-tray, but not a bare --print-bpm, where printing is the
-// point) defaults logging on so a service actually records; the explicit
-// --auto-log / --no-auto-log flags override either way.
+// --no-tray is the explicit "run as a daemon" signal, so it defaults logging on
+// (even alongside --print-bpm, which is additive — "also stream to stdout", not
+// "watch-only"). A bare --print-bpm (without --no-tray) does not enable logging.
+// The explicit --auto-log / --no-auto-log flags override either way.
 func (o cliOptions) effectiveAutoLog(cfgAutoLog bool) bool {
 	v := cfgAutoLog
-	if o.noTray && !o.printBPM {
+	if o.noTray {
 		v = true
 	}
 	if o.autoLog {
