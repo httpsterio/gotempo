@@ -152,8 +152,8 @@ replace the bare `log.*` calls package-wide; error logs always print.
 | 3 | BLE adapter not available, `--no-tray` with no device, or (deferred) `--device` not found |
 | 4 | `--status`: gotempo is not running |
 
-Documented in `--help` output and the README. (File-I/O failures currently log
-and continue rather than mapping to a distinct exit code.)
+Documented in `--help` output and [docs/CLI.md](CLI.md). (File-I/O failures
+currently log and continue rather than mapping to a distinct exit code.)
 
 ### Signal handling
 
