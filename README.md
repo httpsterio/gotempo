@@ -1,13 +1,11 @@
 # gotempo
 
-[![Latest release](https://img.shields.io/github/v/release/httpsterio/gotempo)](https://github.com/httpsterio/gotempo/releases/latest)
-[![Release build](https://img.shields.io/github/actions/workflow/status/httpsterio/gotempo/release.yml?label=release%20build)](https://github.com/httpsterio/gotempo/actions/workflows/release.yml)
-[![License: GPL-3.0](https://img.shields.io/github/license/httpsterio/gotempo)](LICENSE.md)
-[![Go version](https://img.shields.io/github/go-mod/go-version/httpsterio/gotempo)](go.mod)
+[![Release build](https://github.com/httpsterio/gotempo/actions/workflows/release.yml/badge.svg)](https://github.com/httpsterio/gotempo/actions/workflows/release.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE.md)
+[![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-blue)](#requirements)
-[![Downloads](https://img.shields.io/github/downloads/httpsterio/gotempo/total)](https://github.com/httpsterio/gotempo/releases)
 
-![gotempo](internal/app/assets/logo.png)
+![gotempo](docs/gotempo-logo.png)
 
 A small Linux tray app that connects to a Bluetooth LE heart-rate monitor, shows connection status in the tray, and writes the current BPM to a text file. Useful as an OBS text source.
 
