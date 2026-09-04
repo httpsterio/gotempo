@@ -209,10 +209,11 @@ Suggested sequence: logging first -> run the aging test to confirm the trigger
   neighbors. Note: there is no scan fallback, so the device must be known to
   BlueZ (bonded / picked once). If a stale/empty BlueZ cache is ever the cause,
   direct connect will fail until a Rescan re-populates it.
-- **Swallowed error:** `persistentConnect` calls `connectAndMonitor`
-  and discards its error on `errSessionDropped`/raw errors without logging, which
-  is why `service discovery timed out` was invisible until a restart dropped into
-  the finite phase (`connectLoop` ~694, which does log it). Add logging there.
+- **Swallowed error (fixed).** `persistentConnect` used to discard the error from
+  `connectAndMonitor` on `errSessionDropped`/raw errors, which is why
+  `service discovery timed out` was invisible until a restart dropped into the
+  finite phase (`connectLoop` logs it). Both phases now log via
+  `describeConnectErr`.
 - **Error mapping:** `describeConnectErr` maps `timeout on DiscoverServices` ->
-  `service discovery timed out` (~240). Discovery call is `DiscoverServices` (~829);
-  link connect is `adapter.Connect` (~824).
+  `service discovery timed out`. Discovery call is `DiscoverServices` in
+  `connectAndMonitor`; link connect is `adapter.Connect` in `connectDevice`.
