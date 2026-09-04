@@ -283,11 +283,18 @@ WantedBy=default.target
 
 ## BLE reconnect robustness
 See [BUGS.md](BUGS.md) (strap won't reconnect after a long idle). Logging is
-done, so the next organic failure should be self-diagnosing. Remaining, in
-order:
-- **Connect a known device by address** instead of requiring a scan hit. A
-  bonded or already-connected strap does not advertise, so the scan-gate locks
-  it out. Try direct connect, fall back to scan. Most likely tied to the bug.
+done, so the next organic failure should be self-diagnosing.
+
+- **Connect a known device by address (done).** Reconnection (both the finite
+  schedule and the persistent phase) now connects straight to the device by
+  address with no scan, replacing the old scan-gate that required a scan hit
+  first. A direct connect targets only the peer address, so it emits no
+  scan-request probes to other devices in range — this was also a privacy fix
+  (continuous active scanning was probing neighbors). There is deliberately **no
+  scan fallback**: background scanning is gone entirely, so the device must be
+  known to BlueZ (bonded / seen once via the tray pick or Rescan). `findDevice`
+  and `persistScan` were removed; `connectDevice` (in `ble.go`) wraps
+  `adapter.Connect` so a blocking attempt is still cancellable on stop/switch.
 - **Self-heal** by dropping the BlueZ bond and reconnecting after repeated
   `service discovery timed out` on a known device (only safe for Just Works
   devices). Do the aging test from BUGS.md first to confirm the trigger.

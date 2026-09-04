@@ -199,14 +199,17 @@ low-risk; worth trying before the heavier self-heal.
 Suggested sequence: logging first -> run the aging test to confirm the trigger
 -> clean-Disconnect-on-idle -> detection-triggered self-heal if still needed.
 
-### Related code (main.go, line numbers approximate)
-- **Scan-gate** (root of "not found in scan"): `connectOnce` requires `findDevice`
-  to see the device advertising before connecting, else returns
-  `device ... not found in scan` (~line 754, error at 761). A bonded/connected
-  strap does not advertise, so this locks it out. A separate fix is to try a direct
-  connect-by-address for a known device and fall back to scanning. `findDevice` is
-  at ~384, `persistScan` ~769, `persistentConnect` ~797.
-- **Swallowed error:** `persistentConnect` (~797) calls `connectAndMonitor` (~822)
+### Related code (internal/app/ble.go)
+- **Scan-gate removed (fixed).** Reconnection used to require a scan hit before
+  connecting (`connectOnce`/`persistScan` via `findDevice`), which returned
+  `device ... not found in scan` for a bonded strap that does not advertise. Both
+  `findDevice` and `persistScan` are gone; `connectOnce` and `persistentConnect`
+  now connect directly by address (`connectDevice` wraps `adapter.Connect`). This
+  removes the scan-gate lockout *and* the continuous active scanning that probed
+  neighbors. Note: there is no scan fallback, so the device must be known to
+  BlueZ (bonded / picked once). If a stale/empty BlueZ cache is ever the cause,
+  direct connect will fail until a Rescan re-populates it.
+- **Swallowed error:** `persistentConnect` calls `connectAndMonitor`
   and discards its error on `errSessionDropped`/raw errors without logging, which
   is why `service discovery timed out` was invisible until a restart dropped into
   the finite phase (`connectLoop` ~694, which does log it). Add logging there.

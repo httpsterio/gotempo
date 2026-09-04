@@ -15,8 +15,6 @@ import (
 // ── constants ────────────────────────────────────────────────────────────────
 
 const (
-	connectScanTimeout = 10 * time.Second
-
 	// After a healthy session drops, the file keeps the last BPM so a quick
 	// reconnect transitions smoothly. If the disconnect lasts longer the file
 	// is cleared so stale data isn't shown.
@@ -25,9 +23,14 @@ const (
 	maxSwitchSlots     = 6
 	switchScanDuration = 15 * time.Second
 
+	// Reconnection is direct connect-by-address (no scan), so the gap between
+	// failed attempts in the persistent phase is just a courtesy pause; BlueZ's
+	// own connect attempt already blocks for a while before failing.
+	persistentRetryInterval = 5 * time.Second
+
 	// In the persistent phase, log a heartbeat at most this often so a long
 	// wait leaves a trace without flooding the log.
-	persistScanLogInterval = 60 * time.Second
+	persistLogInterval = 60 * time.Second
 )
 
 // retrySchedule is the finite, silent reconnection phase: 5×3s then 5×10s.
@@ -374,41 +377,6 @@ func (a *App) scanDevices(d time.Duration) []KnownDevice {
 	return out
 }
 
-// findDevice scans until the target MAC is seen (or the timeout elapses). This
-// re-populates BlueZ's device cache so a subsequent connect-by-address works,
-// which is required after the adapter has been power-cycled.
-func (a *App) findDevice(target string, d time.Duration) (*bluetooth.Adapter, bool) {
-	a.scanMu.Lock()
-	defer a.scanMu.Unlock()
-
-	adapter, err := a.ensureAdapter()
-	if err != nil {
-		logErrln("[BLE] scan skipped:", err)
-		return nil, false
-	}
-
-	found := false
-	// Both the timeout and a match stop the scan. The library's StopScan isn't
-	// safe to call concurrently (it closes an unsynchronized channel), so funnel
-	// both callers through a sync.Once to avoid a double-close panic if a match
-	// lands at the same moment the timeout fires.
-	var stopOnce sync.Once
-	stop := func() { stopOnce.Do(func() { _ = adapter.StopScan() }) }
-	timer := time.AfterFunc(d, stop)
-	defer timer.Stop()
-
-	if err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
-		if strings.EqualFold(r.Address.MAC.String(), target) {
-			found = true
-			stop()
-		}
-	}); err != nil {
-		logErrln("[BLE] scan error:", err)
-		return adapter, found
-	}
-	return adapter, found
-}
-
 // ── BLE loop ─────────────────────────────────────────────────────────────────
 
 func makeSchedule() []time.Duration {
@@ -465,10 +433,11 @@ func (a *App) runBLE() {
 // connectLoop runs the reconnection state machine for a single device address.
 // It retries silently through the finite schedule (5×3s, then 5×10s); a
 // reconnect during that phase is silent. When the finite schedule exhausts it
-// sends a single "device lost" notification and then scans continuously until
-// the device reappears. A reconnect during that phase notifies "reconnected"
-// (via connectAndMonitor) and resets the schedule. It never gives up; it returns
-// only errStopped or errSwitched.
+// sends a single "device lost" notification and then retries connect-by-address
+// until the device reappears. A reconnect during that phase notifies
+// "reconnected" (via connectAndMonitor) and resets the schedule. It never gives
+// up; it returns only errStopped or errSwitched. No phase scans, so reconnection
+// never probes other devices in range.
 func (a *App) connectLoop(addr bluetooth.Address) error {
 	schedule := makeSchedule()
 	attempt := 0
@@ -526,93 +495,115 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 	}
 }
 
-// connectOnce scans for the device (with a timeout) then connects. Used during
-// the finite schedule phase. It returns errStopped, errSwitched, errSessionDropped,
-// or a raw connect/discovery error.
+// connectOnce connects directly to the device by address, with no scan. Used
+// during the finite schedule phase. A direct connect targets only the peer
+// address, so it never emits scan-request probes to other devices in range. It
+// returns errStopped, errSwitched, errSessionDropped, or a raw connect/discovery
+// error.
 func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 	a.setPhase(phaseConnecting)
-	logInfof("[BLE] scanning for %s…", addr.MAC.String())
-	adapter, ok := a.findDevice(addr.MAC.String(), connectScanTimeout)
-	if adapter == nil {
-		return errors.New("no bluetooth adapter available")
-	}
-	if !ok {
-		return fmt.Errorf("device %s not found in scan", addr.MAC.String())
+	adapter, err := a.ensureAdapter()
+	if err != nil {
+		return err
 	}
 	return a.connectAndMonitor(adapter, addr, wasNotified)
 }
 
-// persistScan repeatedly scans (one bounded round at a time) until the target
-// device is seen or the app is stopped/switched. Holding scanMu only per round
-// lets the tray's own scans (Rescan) interleave instead of blocking.
-func (a *App) persistScan(target string) (*bluetooth.Adapter, error) {
-	a.setPhase(phaseReconnecting)
+// persistentConnect retries a direct connect-by-address until the device comes
+// back, then monitors the session; on a drop it goes straight back to retrying.
+// It never scans, so it emits no scan-request probes to other devices while the
+// strap is away (the H10 is off most of the time it isn't worn). BlueZ must know
+// the device for connect-by-address to work; a bonded strap qualifies, and the
+// device is established by the user's tray pick / Rescan / --select-device, never
+// by a background scan. It returns errStopped or errSwitched only.
+func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error {
 	start := time.Now()
 	var lastLog time.Time // zero value forces a log on the first round
 	for {
 		select {
 		case <-a.stop:
-			return nil, errStopped
+			return errStopped
 		case <-a.switchCh:
-			return nil, errSwitched
+			return errSwitched
 		default:
 		}
 
-		if time.Since(lastLog) >= persistScanLogInterval {
-			logInfof("[BLE] still scanning for %s (%s elapsed)", target, time.Since(start).Round(time.Second))
+		a.setPhase(phaseReconnecting)
+		if time.Since(lastLog) >= persistLogInterval {
+			logInfof("[BLE] reconnecting to %s (%s elapsed)", addr.MAC.String(), time.Since(start).Round(time.Second))
 			lastLog = time.Now()
 		}
 
-		if adapter, found := a.findDevice(target, connectScanTimeout); found {
-			logInfof("[BLE] %s back in range after %s", target, time.Since(start).Round(time.Second))
-			return adapter, nil
+		adapter, err := a.ensureAdapter()
+		if err != nil {
+			logErrf("[BLE] %v", err)
+		} else if err = a.connectAndMonitor(adapter, addr, wasNotified); errors.Is(err, errStopped) || errors.Is(err, errSwitched) {
+			return err
+		} else if errors.Is(err, errSessionDropped) {
+			// connectAndMonitor logs the session length on drop; flip state and
+			// retry immediately so a brief blip reconnects fast.
+			a.state.onDisconnect()
+			a.signalUI()
+			wasNotified = false
+			start = time.Now()
+			lastLog = time.Time{}
+			continue
+		} else if err != nil {
+			// Expected while the strap is away (connect aborts/times out).
+			logErrf("[BLE] connect failed: %s", describeConnectErr(err))
 		}
 
 		select {
 		case <-a.stop:
-			return nil, errStopped
+			return errStopped
 		case <-a.switchCh:
-			return nil, errSwitched
-		case <-time.After(1 * time.Second):
+			return errSwitched
+		case <-time.After(persistentRetryInterval):
 		}
 	}
 }
 
-// persistentConnect runs a continuous scan for the device; when it appears,
-// connects and monitors the session. On session drop or connection failure it
-// returns to scanning immediately. It returns errStopped or errSwitched when
-// the application shuts down or switches devices.
-func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error {
-	for {
-		adapter, err := a.persistScan(addr.MAC.String())
-		if err != nil {
-			return err
-		}
-
-		err = a.connectAndMonitor(adapter, addr, wasNotified)
-		if errors.Is(err, errStopped) || errors.Is(err, errSwitched) {
-			return err
-		}
-		if errors.Is(err, errSessionDropped) {
-			// connectAndMonitor logs the session length on drop; flip state.
-			a.state.onDisconnect()
-			a.signalUI()
-			wasNotified = false
-		} else if err != nil {
-			// A connect/discovery error here was previously swallowed, leaving
-			// the persistent phase silent. Surface it before rescanning.
-			logErrf("[BLE] connect failed: %s", describeConnectErr(err))
-		}
+// connectDevice attempts a direct connect-by-address and returns once connected,
+// failed, or the app stops/switches. adapter.Connect targets only the peer
+// address (no scan, no probes to other devices) but can block while BlueZ waits
+// on the connection attempt, so it runs in a goroutine and is abandoned on
+// stop/switch. An abandoned attempt that later connects is disconnected so it
+// does not hold the device's single BLE slot.
+func (a *App) connectDevice(adapter *bluetooth.Adapter, addr bluetooth.Address) (bluetooth.Device, error) {
+	type result struct {
+		dev bluetooth.Device
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		dev, err := adapter.Connect(addr, bluetooth.ConnectionParams{})
+		ch <- result{dev, err}
+	}()
+	abandon := func(sentinel error) (bluetooth.Device, error) {
+		go func() {
+			if r := <-ch; r.err == nil {
+				_ = r.dev.Disconnect()
+			}
+		}()
+		return bluetooth.Device{}, sentinel
+	}
+	select {
+	case <-a.stop:
+		return abandon(errStopped)
+	case <-a.switchCh:
+		return abandon(errSwitched)
+	case r := <-ch:
+		return r.dev, r.err
 	}
 }
 
-// connectAndMonitor connects to a recently-scanned device, discovers the HR
-// service and characteristic, enables notifications, and blocks until the
-// session ends or the app stops/switches. It always returns a sentinel error:
-// errStopped, errSwitched, errSessionDropped, or a raw connect/discovery error.
+// connectAndMonitor connects to the device by address, discovers the HR service
+// and characteristic, enables notifications, and blocks until the session ends
+// or the app stops/switches. It always returns a sentinel error: errStopped,
+// errSwitched, errSessionDropped, or a raw connect/discovery error.
 func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Address, wasNotified bool) error {
 	logInfof("[BLE] connecting to %s…", addr.MAC.String())
-	device, err := adapter.Connect(addr, bluetooth.ConnectionParams{})
+	device, err := a.connectDevice(adapter, addr)
 	if err != nil {
 		return err
 	}

@@ -102,5 +102,9 @@ WantedBy=default.target
 ```
 
 Set the device in `config.json` first, since headless mode has no device picker
-(see [Configuration](CONFIGURATION.md)). `--no-tray` logs by default, so no extra
+(see [Configuration](CONFIGURATION.md)). The device must also be known to BlueZ
+(paired or connected at least once): gotempo connects by address and never scans
+in the background, so headless it cannot discover an unknown device on its own.
+Pair it once (e.g. with `bluetoothctl` or blueman), or run once with the tray and
+pick it, then headless reconnects work. `--no-tray` logs by default, so no extra
 flag is needed for a recording service.

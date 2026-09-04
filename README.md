@@ -72,7 +72,9 @@ gotempo also runs headless and answers one-shot queries, for systems without a t
 When the connection drops, gotempo reconnects on its own:
 
 - It retries silently for a short while. A device that returns in this window reconnects with no notification.
-- If that fails, it sends one "device lost" notification and scans continuously until the device returns, then sends "reconnected".
+- If that fails, it sends one "device lost" notification and keeps retrying until the device returns, then sends "reconnected".
+
+Reconnection connects straight to your device by address, it does not scan. So gotempo never probes other Bluetooth devices in range while waiting for your strap to come back. Scanning happens only when you pick a device or hit Rescan. Connecting by address needs the device to be known to BlueZ already, which it is once you have paired or connected it once.
 
 The BPM file keeps its last value across a brief drop and clears after about ten seconds disconnected, so it doesn't leave a stale reading (see [Files & configuration](docs/CONFIGURATION.md)).
 
