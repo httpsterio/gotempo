@@ -67,6 +67,17 @@ On first connect, accept the pairing prompt if it appears. Most straps allow one
 gotempo also runs headless and answers one-shot queries, for systems without a tray or for scripts and status bars: connect without the tray (`--no-tray`), stream readings (`--print-bpm`), or report the running app's state (`--status`). See the full flag reference, output formats, exit codes, and a systemd unit in [docs/CLI.md](docs/CLI.md).
 
 
+## ITGmania overlay
+
+gotempo can drive `gotempo.lua`, a Simply Love theme module that draws your heart rate on ITGmania's gameplay screen. Install the module, then point gotempo at it:
+
+```sh
+gotempo --itgmania-module ~/.itgmania/Themes/Simply\ Love/Modules/gotempo.lua
+```
+
+gotempo writes `hr.txt` beside the module, and the panel appears in game. The setting is saved, so later launches need no flag. It works whether or not session logging is on. See [ITGmania overlay](docs/CONFIGURATION.md#itgmania-overlay) for the details.
+
+
 ## Reconnection behaviour
 
 When the connection drops, gotempo reconnects on its own:
@@ -84,7 +95,7 @@ It also survives the Bluetooth adapter being toggled off and on, including when 
 ## Documentation
 
 - [Command line](docs/CLI.md) — headless mode, all flags, output formats, exit codes, systemd
-- [Files & configuration](docs/CONFIGURATION.md) — file locations and formats, `config.json` schema
+- [Files & configuration](docs/CONFIGURATION.md) — file locations and formats, `config.json` schema, ITGmania overlay
 - [CONTRIBUTING.md](CONTRIBUTING.md) — build from source, versioning, releases
 - [Known issues](docs/BUGS.md)
 

@@ -153,6 +153,7 @@ func (a *App) publishStatus() {
 		Logging:   logging,
 		BPM:       bpm,
 		Device:    dev,
+		ITGmania:  itgTarget(),
 	})
 }
 
@@ -307,6 +308,11 @@ func (a *App) handleBPM(bpm int) {
 	// Publish live status (bpm) regardless of logging, so --status and external
 	// pollers see the real reading even when logging is off.
 	a.recordBPM(bpm)
+
+	// ITGmania overlay: every reading, undeduped and ungated, because the
+	// timestamp in the line is what tells the module the strap is still live.
+	// See itgmania.go.
+	writeITG(bpm, now)
 
 	a.state.mu.Lock()
 	logging := a.state.logging

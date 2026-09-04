@@ -41,6 +41,23 @@ func TestConfigAutoLogRoundTrip(t *testing.T) {
 	}
 }
 
+func TestConfigITGmaniaModuleRoundTrip(t *testing.T) {
+	orig := Config{ITGmaniaModule: "/home/u/.itgmania/Themes/Simply Love/Modules/gotempo.lua"}
+	// Same trap as AutoLog: the save path goes through clone(), so a clone that
+	// drops the field would silently unset the overlay on every config write.
+	data, err := json.MarshalIndent(orig.clone(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := parseConfig(data)
+	if got == nil {
+		t.Fatal("parseConfig returned nil")
+	}
+	if got.ITGmaniaModule != orig.ITGmaniaModule {
+		t.Errorf("ITGmaniaModule = %q, want %q", got.ITGmaniaModule, orig.ITGmaniaModule)
+	}
+}
+
 func TestParseConfigKeepsDevicelessAutoLog(t *testing.T) {
 	// A config with no current device but auto_log set must be preserved,
 	// otherwise the preference is lost before a device is ever picked.
@@ -110,7 +127,7 @@ func TestParseConfigRejectsDecimalGap(t *testing.T) {
 
 func TestParseConfigAcceptsValidValues(t *testing.T) {
 	// A complete, valid config (zero is a valid floor) round-trips unchanged.
-	data := `{"current":"AA","known":[],"auto_log":true,"session_gap_minutes":30,"min_bpm_threshold":0}`
+	data := `{"current":"AA","known":[],"auto_log":true,"session_gap_minutes":30,"min_bpm_threshold":0,"itgmania_module":""}`
 	cfg, changed := parseConfig([]byte(data))
 	if cfg == nil {
 		t.Fatal("parseConfig returned nil")

@@ -29,6 +29,7 @@ type cliOptions struct {
 	device      string
 	logLevel    string
 	config      string
+	itgModule   string
 }
 
 // headless reports whether the long-running app should skip the tray. Printing
@@ -98,6 +99,7 @@ func parseFlags(args []string) (cliOptions, error) {
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress info logging (errors only); same as --log-level error")
 	fs.StringVar(&o.logLevel, "log-level", "", "stderr verbosity: error|info|debug (default info)")
 	fs.StringVar(&o.config, "config", "", "path to config.json (must already exist)")
+	fs.StringVar(&o.itgModule, "itgmania-module", "", "set the path to gotempo.lua in config (hr.txt is written beside it), then run")
 	fs.Usage = func() {
 		out := fs.Output()
 		// Hand-rolled, grouped help: flag.PrintDefaults sorts alphabetically,
@@ -118,6 +120,7 @@ func parseFlags(args []string) (cliOptions, error) {
 		line("--no-autostart", "disable launch-on-login, then exit")
 		line("--device <mac>", "set the current device by MAC, then run")
 		line("--select-device", "interactively pick the current device, then run")
+		line("--itgmania-module", "set the path to gotempo.lua (<path>), then run")
 		fmt.Fprintln(out, "\nOptions:")
 		line("--auto-log", "force session logging on for this run")
 		line("--no-auto-log", "force session logging off for this run")
@@ -272,7 +275,9 @@ func formatTS(t time.Time, mode tsMode) string {
 
 // printStatus writes the --status result. JSON carries the full state (running,
 // connected, phase, logging, bpm, device) so a poller has everything; plain text
-// is a single human-readable line.
+// is a single human-readable line, plus a second line naming the ITGmania target
+// when that overlay is on, so a misconfigured path is visible rather than
+// silent.
 func printStatus(running bool, st appStatus, asJSON bool) {
 	if asJSON {
 		b, _ := json.Marshal(struct {
@@ -282,8 +287,9 @@ func printStatus(running bool, st appStatus, asJSON bool) {
 			Logging   bool          `json:"logging"`
 			BPM       *int          `json:"bpm"`
 			Device    *statusDevice `json:"device"`
+			ITGmania  string        `json:"itgmania,omitempty"`
 			Timestamp string        `json:"timestamp"`
-		}{running, st.Connected, st.Phase, st.Logging, st.BPM, st.Device, time.Now().Format(time.RFC3339)})
+		}{running, st.Connected, st.Phase, st.Logging, st.BPM, st.Device, st.ITGmania, time.Now().Format(time.RFC3339)})
 		fmt.Println(string(b))
 		return
 	}
@@ -318,6 +324,9 @@ func printStatus(running bool, st appStatus, asJSON bool) {
 		fmt.Printf("reconnecting, %s, %s\n", dev, logging)
 	default: // idle / unknown
 		fmt.Printf("idle, %s\n", dev)
+	}
+	if st.ITGmania != "" {
+		fmt.Printf("itgmania: %s\n", st.ITGmania)
 	}
 }
 

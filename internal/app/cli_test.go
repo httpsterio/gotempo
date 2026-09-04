@@ -26,6 +26,7 @@ func TestParseFlags(t *testing.T) {
 		{"no-autostart", []string{"--no-autostart"}, cliOptions{noAutostart: true}},
 		{"device", []string{"--device", "24:AC:AC:18:41:CC"}, cliOptions{device: "24:AC:AC:18:41:CC"}},
 		{"select-device", []string{"--select-device"}, cliOptions{selectDev: true}},
+		{"itgmania-module", []string{"--itgmania-module", "/x/gotempo.lua"}, cliOptions{itgModule: "/x/gotempo.lua"}},
 		{"auto-log", []string{"--auto-log"}, cliOptions{autoLog: true}},
 		{"no-auto-log", []string{"--no-auto-log"}, cliOptions{noAutoLog: true}},
 	}

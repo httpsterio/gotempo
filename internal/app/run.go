@@ -121,6 +121,14 @@ func cmdRun(opts cliOptions) int {
 	}
 	changed = changed || devChanged
 
+	// --itgmania-module is independent of the device flags and applies after
+	// them, so a single invocation can set both.
+	exit, itgChanged, proceed := app.applySetupITGModule(opts)
+	if !proceed {
+		return exit
+	}
+	changed = changed || itgChanged
+
 	if changed {
 		// First run (no file), a config that was missing keys / had invalid
 		// values, or a device just set: write the validated, complete form back so
@@ -134,6 +142,12 @@ func cmdRun(opts cliOptions) int {
 	} else {
 		logInfof("using device: %s", cfg.Current)
 	}
+
+	// Resolve the ITGmania target once, here: the module gets reinstalled and
+	// games get moved, so a path that validated when it was set is re-checked
+	// every launch rather than trusted. A miss disables the overlay for the run
+	// and logs why.
+	setupITG(app.snapshotConfig().ITGmaniaModule)
 
 	// Apply the session-only logging override (config value, with headless
 	// defaulting on and --auto-log/--no-auto-log winning). Not persisted.

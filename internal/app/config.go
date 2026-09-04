@@ -50,6 +50,12 @@ type Config struct {
 
 	SessionGapMinutes int `json:"session_gap_minutes"` // gap that ends a CSV session
 	MinBPMThreshold   int `json:"min_bpm_threshold"`   // readings below this are junk
+
+	// ITGmaniaModule is the path to the gotempo.lua theme module. hr.txt is
+	// written beside it, for the in-game heart-rate panel. Empty disables the
+	// overlay. There is no autodiscovery: the user sets this, by hand or with
+	// --itgmania-module.
+	ITGmaniaModule string `json:"itgmania_module"`
 }
 
 // Defaults for the CSV session logger. No omitempty on the keys above, so a
@@ -70,6 +76,7 @@ func defaultConfig() *Config {
 		AutoLog:           false,
 		SessionGapMinutes: defaultSessionGapMinutes,
 		MinBPMThreshold:   defaultMinBPMThreshold,
+		ITGmaniaModule:    "",
 	}
 }
 
@@ -98,6 +105,7 @@ func (c Config) clone() Config {
 		AutoLog:           c.AutoLog,
 		SessionGapMinutes: c.SessionGapMinutes,
 		MinBPMThreshold:   c.MinBPMThreshold,
+		ITGmaniaModule:    c.ITGmaniaModule,
 	}
 	out.Known = append([]KnownDevice(nil), c.Known...)
 	return out
@@ -211,6 +219,20 @@ func parseConfig(data []byte) (*Config, bool) {
 		var n int
 		if json.Unmarshal(v, &n) == nil && n >= 0 {
 			cfg.MinBPMThreshold = n
+		} else {
+			changed = true
+		}
+	} else {
+		changed = true
+	}
+
+	// Path to gotempo.lua, or empty for "no overlay". Not checked for existence
+	// here: that is done once at startup, so a config written while the game is
+	// uninstalled still round-trips.
+	if v, ok := raw["itgmania_module"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			cfg.ITGmaniaModule = s
 		} else {
 			changed = true
 		}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -149,6 +150,35 @@ func (a *App) applySetupDevice(opts cliOptions) (exit int, changed, proceed bool
 		return 0, true, true
 	}
 	return 0, false, true
+}
+
+// applySetupITGModule handles --itgmania-module: it records the path to
+// gotempo.lua in the in-memory config (the caller persists it) and lets the run
+// proceed. Like --config, an explicit path must already exist, since the user
+// pointed somewhere specific and a typo would otherwise become a silently dead
+// overlay. It is orthogonal to the device flags, so it applies alongside them.
+func (a *App) applySetupITGModule(opts cliOptions) (exit int, changed, proceed bool) {
+	if opts.itgModule == "" {
+		return 0, false, true
+	}
+	abs, err := filepath.Abs(opts.itgModule)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid --itgmania-module path: %v\n", err)
+		return 1, false, false
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gotempo.lua not found: %s\n", abs)
+		return 1, false, false
+	}
+	if info.IsDir() {
+		fmt.Fprintf(os.Stderr, "--itgmania-module wants the gotempo.lua file, not a directory: %s\n", abs)
+		return 1, false, false
+	}
+	a.cfgMu.Lock()
+	a.cfg.ITGmaniaModule = abs
+	a.cfgMu.Unlock()
+	return 0, true, true
 }
 
 // setCurrentDevice adds the device (if absent) and marks it current. A blank

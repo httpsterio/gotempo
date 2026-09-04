@@ -17,6 +17,7 @@ and config it reads/writes, see [Configuration](CONFIGURATION.md). Back to the
 | `--no-autostart` | Disable launch-on-login (remove the autostart entry), then exit. |
 | `--device <mac>` | Set the current device by MAC in `config.json`, then run. |
 | `--select-device` | Interactively pick the current device, then run (needs a terminal). |
+| `--itgmania-module <path>` | Set the path to `gotempo.lua` in `config.json` (`hr.txt` is written beside it), then run. |
 | `--auto-log` | Force session logging on for this run (overrides config). |
 | `--no-auto-log` | Force session logging off for this run (overrides config). |
 | `--log-level <lvl>` | stderr verbosity: `error`, `info` (default), or `debug`. |
@@ -28,7 +29,7 @@ and config it reads/writes, see [Configuration](CONFIGURATION.md). Back to the
 Most flags are *session-only* and never touch `config.json` or disk; they affect
 the single run (the `--auto-log`/`--no-auto-log` and logging flags included).
 *Setup* flags are the exception: `--autostart`/`--no-autostart` persist a change
-and then exit; `--device`/`--select-device` set the current device in
+and then exit; `--device`/`--select-device`/`--itgmania-module` write to
 `config.json` and then continue into a normal run. `--autostart` overwrites an
 existing entry silently; `--no-autostart` on a missing entry is a no-op success.
 
@@ -36,6 +37,14 @@ existing entry silently; `--no-autostart` on a missing entry is a no-op success.
 rejects anything that isn't one. `--select-device` lists the known devices first
 and offers an on-demand scan (`s`); picking a known device skips scanning. It
 needs an interactive terminal and exits non-zero if run without one.
+
+`--itgmania-module` takes the path to the `gotempo.lua` theme module and stores
+it, enabling the in-game heart-rate panel; gotempo then writes `hr.txt` in the
+same folder. Like `--config`, the path must already exist, and a directory is
+rejected: a typo would otherwise become a silently dead overlay. It is
+independent of the device flags, so `--device` and `--itgmania-module` can be
+given together. See [ITGmania overlay](CONFIGURATION.md#itgmania-overlay) for the
+file format and for which copy of the module to point at.
 
 Both start a run, so they take the single-instance lock: if a gotempo is already
 running they print "already running" and exit without changing the device. To
@@ -63,26 +72,33 @@ BPM without a running app" mode would be a separate flag; it isn't implemented.)
 
 Plain output is a single line, e.g. `connected, 61 bpm, Polar H10, logging off`,
 `reconnecting, Polar H10, logging on`, `idle, no device`, or `gotempo is not
-running`. `--json` gives the full state for scripting:
+running`. When the ITGmania overlay is on, a second line names the resolved
+target, e.g. `itgmania: /home/you/.itgmania/Themes/Simply Love/Modules/hr.txt`,
+so a misconfigured path is visible rather than silent. `--json` gives the full
+state for scripting:
 
 ```json
-{"running":true,"connected":true,"phase":"connected","logging":false,"bpm":61,"device":{"mac":"24:AC:AC:18:41:CC","name":"Polar H10"},"timestamp":"2026-06-16T02:40:00+03:00"}
+{"running":true,"connected":true,"phase":"connected","logging":false,"bpm":61,"device":{"mac":"24:AC:AC:18:41:CC","name":"Polar H10"},"itgmania":"/home/you/.itgmania/Themes/Simply Love/Modules/hr.txt","timestamp":"2026-06-16T02:40:00+03:00"}
 ```
 
 `phase` is one of `idle` (no device), `connecting`, `reconnecting` (device lost,
-scanning), or `connected`, so a poller can tell "reconnecting" apart from "no
-device" rather than collapsing both into `connected:false`.
+retrying), or `connected`, so a poller can tell "reconnecting" apart from "no
+device" rather than collapsing both into `connected:false`. `itgmania` is absent
+when the overlay is off.
 
 `--config <path>` relocates only the config file. The BPM/status files and the
 single-instance lock stay at the shared data/runtime locations, so two
 `--config`s can't run side by side.
+
+Exit code 1 covers a `--itgmania-module` path that doesn't exist or is a
+directory.
 
 Exit codes:
 
 | Code | Meaning |
 |---|---|
 | 0 | Clean exit; `--status`: running and connected |
-| 1 | Config/setup error (bad flag or value, missing `--config`, invalid `--device` MAC, `--select-device` without a terminal, setup write/remove failed) |
+| 1 | Config/setup error (bad flag or value, missing `--config`, invalid `--device` MAC, missing `--itgmania-module` file, `--select-device` without a terminal, setup write/remove failed) |
 | 2 | `--status`: running but not connected |
 | 3 | Bluetooth adapter unavailable, or `--no-tray` with no device configured |
 | 4 | `--status`: gotempo is not running |

@@ -28,6 +28,7 @@ type appStatus struct {
 	Logging   bool          `json:"logging"`
 	BPM       *int          `json:"bpm"`
 	Device    *statusDevice `json:"device"`
+	ITGmania  string        `json:"itgmania,omitempty"` // resolved hr.txt, empty when the overlay is off
 	Updated   string        `json:"updated"`
 }
 
@@ -148,6 +149,7 @@ func (s *AppState) onDisconnect() {
 		if err := os.WriteFile(outputPath(), []byte{}, 0644); err != nil {
 			logErrf("[BPM] could not clear output: %v", err)
 		}
+		clearITG()
 	})
 	s.mu.Unlock()
 }
@@ -157,12 +159,18 @@ func (s *AppState) onSwitch() {
 	s.connected = false
 	s.mu.Unlock()
 	s.clearOutput()
+	clearITG()
 }
 
 // clearOutput empties the OBS BPM file and resets the dedup/stale state, without
 // changing the connection flag. Used on device switch and when logging is turned
 // off, so the overlay goes blank immediately instead of freezing on the last
 // value.
+//
+// It deliberately does not touch the ITGmania file: this runs when logging is
+// turned off, and clearing there would make the game panel depend on the logging
+// toggle. The callers that mean "the strap is gone" (onDisconnect, onSwitch)
+// clear it themselves.
 func (s *AppState) clearOutput() {
 	s.mu.Lock()
 	s.hasBPM = false
