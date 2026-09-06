@@ -13,7 +13,7 @@ import (
 // This file holds the Linux/BlueZ implementations of the platform contract.
 // Mac (platform_darwin.go) and Windows (platform_windows.go) provide their own
 // versions of the same functions when those builds are added; shared code only
-// ever calls them by name. The contract is: dataDir, notify, openLogFolder, the
+// ever calls them by name. The contract is: dataDir, notify, openFolder, the
 // autostart trio, and openAdapter.
 
 // dataDir is the XDG data location: $XDG_DATA_HOME/gotempo or
@@ -33,14 +33,12 @@ func notify(msg string) {
 	_ = exec.Command("notify-send", "gotempo", msg).Run()
 }
 
-// openLogFolder opens the log directory in a file browser. It prefers
-// xdg-open, but that fails when the system's inode/directory handler is
-// misconfigured (it exits non-zero after launching), so it falls back to
-// common file managers. xdg-open is run synchronously to observe its exit
-// code; the fallbacks are just launched. Call this from its own goroutine —
-// xdg-open can block briefly.
-func openLogFolder() {
-	dir := logsDir()
+// openFolder opens a directory in a file browser. It prefers xdg-open, but
+// that fails when the system's inode/directory handler is misconfigured (it
+// exits non-zero after launching), so it falls back to common file managers.
+// xdg-open is run synchronously to observe its exit code; the fallbacks are
+// just launched. Call this from its own goroutine — xdg-open can block briefly.
+func openFolder(dir string) {
 	if err := exec.Command("xdg-open", dir).Run(); err == nil {
 		return
 	}
@@ -57,7 +55,7 @@ func openLogFolder() {
 			return
 		}
 	}
-	logErrf("[logs] could not open %s: no working file-manager opener found", dir)
+	logErrf("[open] could not open %s: no working file-manager opener found", dir)
 }
 
 func autostartPath() string {

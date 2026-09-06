@@ -239,6 +239,7 @@ func (a *App) runTray() {
 		systray.AddSeparator()
 
 		t.mOpenLogs = systray.AddMenuItem("Open log folder", "")
+		t.mOpenConf = systray.AddMenuItem("Open config folder", "")
 		t.mAutoLog = systray.AddMenuItemCheckbox("Autostart HR log", "", a.snapshotConfig().AutoLog)
 		t.mAutostart = systray.AddMenuItemCheckbox("Start on boot", "", autostartEnabled())
 

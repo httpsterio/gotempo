@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ type tray struct {
 
 	mLog       *systray.MenuItem // single Start/Stop logging toggle
 	mOpenLogs  *systray.MenuItem
+	mOpenConf  *systray.MenuItem
 	mAutoLog   *systray.MenuItem
 	mAutostart *systray.MenuItem
 	mQuit      *systray.MenuItem
@@ -191,7 +193,10 @@ func (t *tray) loop(autoScan bool) {
 			}
 			t.refresh()
 		case <-t.mOpenLogs.ClickedCh:
-			go openLogFolder()
+			go openFolder(logsDir())
+		case <-t.mOpenConf.ClickedCh:
+			// Dir of configPath, not configDir, so --config points here too.
+			go openFolder(filepath.Dir(configPath()))
 		case <-t.mAutoLog.ClickedCh:
 			// Only sets the launch preference; does not change current logging.
 			if t.mAutoLog.Checked() {

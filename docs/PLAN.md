@@ -302,7 +302,7 @@ done, so the next organic failure should be self-diagnosing.
 ## Cross-platform: macOS and Windows
 The split prepared the ground; the implementations are not written. Each new OS
 needs one `internal/app/platform_<os>.go` implementing the contract (`dataDir`,
-`notify`, `openLogFolder`, the autostart trio, `openAdapter`), plus
+`notify`, `openFolder`, the autostart trio, `openAdapter`), plus
 `lock_windows.go` for Windows (flock is shared via `lock_unix.go` on
 Linux/macOS). No shared files should need editing. `describeConnectErr` strings
 are BlueZ-specific and fall through harmlessly elsewhere. Note macOS BLE uses

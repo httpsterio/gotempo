@@ -57,6 +57,8 @@ On first connect, accept the pairing prompt if it appears. Most straps allow one
 | **Start logging** / **Stop logging** | Begin or stop logging: writes the current BPM to `gotempo-bpm.txt` and appends each reading to a per-session CSV (see [Files & configuration](docs/CONFIGURATION.md)). Greyed out when not applicable. |
 | **Device list** | Known devices (most-recently-used first) plus newly scanned ones, listed directly in the menu. Click one to switch; the current device is marked and not clickable. Up to six shown. |
 | **Rescan for new devices** | Runs a fresh 15-second scan; new monitors appear in the list. |
+| **Open log folder** | Opens the log and CSV directory in a file browser. |
+| **Open config folder** | Opens the directory holding `config.json`. |
 | **Autostart HR log** | When checked, logging starts automatically on launch. |
 | **Start on boot** | Adds or removes `~/.config/autostart/gotempo.desktop`. |
 | **Quit** | Exits the app. |
