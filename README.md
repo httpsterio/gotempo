@@ -58,7 +58,9 @@ For desktop integration (`make install`), version stamping, and the release proc
 
 With no `config.json`, the app starts scanning. Open the tray menu, wait for your monitor to appear (it must be awake and worn to advertise), and click it to connect. The choice is saved, and later launches connect directly.
 
-On first connect, accept the pairing prompt if it appears. Most straps allow one connection at a time, so disconnect the monitor from your phone or other apps first. Some allow more than one.
+Pair and trust the strap before relying on it. On Linux that is `bluetoothctl` (`pair`, then `trust`); trusting is what lets BlueZ reconnect on its own, and an untrusted bond is a suspect in past reconnect failures (see [Known issues](docs/BUGS.md)). On Windows, pair it in Settings → Bluetooth & devices, after which the tray lists it whether or not it is advertising, which a scan alone cannot find.
+
+Most straps allow one connection at a time, so disconnect the monitor from your phone or other apps first. Some allow more than one.
 
 
 ## Tray menu
