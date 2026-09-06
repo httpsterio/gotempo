@@ -66,7 +66,7 @@ On first connect, accept the pairing prompt if it appears. Most straps allow one
 
 ## Command line
 
-gotempo also runs headless and answers one-shot queries, for systems without a tray or for scripts and status bars: connect without the tray (`--no-tray`), stream readings (`--print-bpm`), or report the running app's state (`--status`). See the full flag reference, output formats, exit codes, and a systemd unit in [docs/CLI.md](docs/CLI.md).
+gotempo also runs headless, for systems without a tray or for scripts and status bars: connect without the tray (`--no-tray`), stream readings (`--print-bpm`), or report the running app's state (`--status`). Full flag reference, output formats, exit codes, and a systemd unit in [docs/CLI.md](docs/CLI.md).
 
 
 ## ITGmania overlay
@@ -77,9 +77,9 @@ gotempo can drive `gotempo.lua`, a Simply Love theme module that draws your hear
 "itgmania_module": "/home/you/.itgmania/Themes/Simply Love/Modules/gotempo.lua"
 ```
 
-That is the whole setup. Restart gotempo, and it writes `hr.txt` beside the module for the panel to read. The overlay works whether or not session logging is on.
+Restart gotempo. It writes `hr.txt` beside the module, and the panel appears in game. The overlay does not depend on the logging toggle.
 
-`gotempo --itgmania-module <path>` writes the same key if you would rather not edit the file. See [ITGmania overlay](docs/CONFIGURATION.md#itgmania-overlay) for the format and where the module lives on each OS.
+`gotempo --itgmania-module <path>` sets the same key. See [ITGmania overlay](docs/CONFIGURATION.md#itgmania-overlay) for the file format and where the module lives on each OS.
 
 
 ## Reconnection behaviour
@@ -89,7 +89,7 @@ When the connection drops, gotempo reconnects on its own:
 - It retries silently for a short while. A device that returns in this window reconnects with no notification.
 - If that fails, it sends one "device lost" notification and keeps retrying until the device returns, then sends "reconnected".
 
-Reconnection connects straight to your device by address, it does not scan. So gotempo never probes other Bluetooth devices in range while waiting for your strap to come back. Scanning happens only when you pick a device or hit Rescan. Connecting by address needs the device to be known to BlueZ already, which it is once you have paired or connected it once.
+Reconnection connects straight to your device by address, it does not scan, so it never probes other Bluetooth devices in range while waiting for your strap to come back. Scanning happens only when you pick a device or hit Rescan. Connecting by address needs the device to be known to BlueZ already, which it is once you have paired or connected it once.
 
 The BPM file keeps its last value across a brief drop and clears after about ten seconds disconnected, so it doesn't leave a stale reading (see [Files & configuration](docs/CONFIGURATION.md)).
 
@@ -98,9 +98,9 @@ It also survives the Bluetooth adapter being toggled off and on, including when 
 
 ## Documentation
 
-- [Command line](docs/CLI.md) — headless mode, all flags, output formats, exit codes, systemd
-- [Files & configuration](docs/CONFIGURATION.md) — file locations and formats, `config.json` schema, ITGmania overlay
-- [CONTRIBUTING.md](CONTRIBUTING.md) — build from source, versioning, releases
+- [Command line](docs/CLI.md): headless mode, all flags, output formats, exit codes, systemd
+- [Files & configuration](docs/CONFIGURATION.md): file locations and formats, `config.json` schema, ITGmania overlay
+- [CONTRIBUTING.md](CONTRIBUTING.md): build from source, versioning, releases
 - [Known issues](docs/BUGS.md)
 
 
