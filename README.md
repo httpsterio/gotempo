@@ -71,13 +71,15 @@ gotempo also runs headless and answers one-shot queries, for systems without a t
 
 ## ITGmania overlay
 
-gotempo can drive `gotempo.lua`, a Simply Love theme module that draws your heart rate on ITGmania's gameplay screen. Install the module, then point gotempo at it:
+gotempo can drive `gotempo.lua`, a Simply Love theme module that draws your heart rate on ITGmania's gameplay screen. Install the module, then set one key in `config.json` to its full path:
 
-```sh
-gotempo --itgmania-module ~/.itgmania/Themes/Simply\ Love/Modules/gotempo.lua
+```json
+"itgmania_module": "/home/you/.itgmania/Themes/Simply Love/Modules/gotempo.lua"
 ```
 
-gotempo writes `hr.txt` beside the module, and the panel appears in game. The setting is saved, so later launches need no flag. It works whether or not session logging is on. See [ITGmania overlay](docs/CONFIGURATION.md#itgmania-overlay) for the details.
+That is the whole setup. Restart gotempo, and it writes `hr.txt` beside the module for the panel to read. The overlay works whether or not session logging is on.
+
+`gotempo --itgmania-module <path>` writes the same key if you would rather not edit the file. See [ITGmania overlay](docs/CONFIGURATION.md#itgmania-overlay) for the format and where the module lives on each OS.
 
 
 ## Reconnection behaviour
