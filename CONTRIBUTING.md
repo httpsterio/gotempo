@@ -46,13 +46,28 @@ repo root clean. `version` is stamped via `-ldflags "-X
 gotempo/internal/app.version=…"` (the Makefile path matters; see Releasing).
 
 Platform-specific code sits behind a contract so the shared files never branch
-on the OS. The contract is `dataDir`, `notify`, `openLogFolder`, the autostart
+on the OS. The contract is `dirs`, `notify`, `openFolder`, `pairedDevices`, the autostart
 trio, `openAdapter`, and `acquireInstanceLock`. Linux implements it in
 `platform_linux.go` and `lock_unix.go` (flock; the `unix` build tag also covers
-macOS). Go picks the right file by its `_linux` / `_darwin` / `_windows` suffix,
-within the `internal/app` package. Adding an OS means writing one
-`platform_<os>.go` (plus `lock_windows.go` for Windows) against that contract,
-touching no shared files.
+macOS); Windows in `platform_windows.go` and `lock_windows.go` (named mutex). Go
+picks the right file by its `_linux` / `_darwin` / `_windows` suffix, within the
+`internal/app` package. Adding an OS means writing one `platform_<os>.go` against
+that contract, touching no shared files.
+
+`dirs` is a `dirLayout` value rather than a function: it names the env var and
+home-relative path for the config and data directories, and shared code in
+`config.go` resolves both. Linux keeps them apart per XDG, Windows points both at
+`%LOCALAPPDATA%\gotempo`.
+
+Tray icons are embedded per platform, PNG in `assets_unix.go` and ICO in
+`assets_windows.go`, because Windows loads tray icons through `LoadImageW` and
+reads ICO only. Both files declare the same five variables. The `.ico` files are
+generated from the `.png` of the same name:
+
+```sh
+magick connected.png -define icon:auto-resize=16,24,32,48,64,128 connected.ico
+magick dot-connected.png -define icon:auto-resize=16 dot-connected.ico
+```
 
 ## Releasing
 

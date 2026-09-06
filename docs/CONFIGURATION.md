@@ -6,7 +6,7 @@ Where gotempo keeps its state, and how to edit the config by hand. Back to the
 
 ## File locations
 
-gotempo uses standard XDG directories, created on first run:
+On Linux, gotempo uses standard XDG directories, created on first run:
 
 - `~/.config/gotempo/config.json`: saved device, known-device history, and preferences. Managed by the app; edit it by hand as described below. Honors `$XDG_CONFIG_HOME`.
 - `~/.local/share/gotempo/gotempo-bpm.txt`: current BPM as a raw integer, rewritten on each change. Empty when not logging (cleared the moment you stop). Keeps the last reading briefly across a short dropout, then clears after about ten seconds disconnected. Useful as an OBS text source. Honors `$XDG_DATA_HOME`.
@@ -14,6 +14,16 @@ gotempo uses standard XDG directories, created on first run:
 - `<your ITGmania theme>/Modules/hr.txt`: one line, `<bpm> <YYYYMMDD> <secondsSinceLocalMidnight>`, rewritten on every reading. Only written when `itgmania_module` is set; the location follows that setting, not the XDG dirs. See [ITGmania overlay](#itgmania-overlay).
 - `~/.local/share/gotempo/status.json`: live app state published by the running app, independent of logging — connection, phase, logging flag, current BPM, and device. Read by `gotempo --status` (see [Command line](CLI.md)). Honors `$XDG_DATA_HOME`.
 - `internal/app/assets/` (source tree only): tray status icons and `logo.png`, embedded in the binary at build time.
+
+### Windows
+
+Windows has no config/data split, so everything lives in one folder,
+`%LOCALAPPDATA%\gotempo` (typically `C:\Users\<you>\AppData\Local\gotempo`):
+`config.json`, `gotempo-bpm.txt`, `sessions\*.csv` and `status.json`. Local, not
+Roaming, so logs do not follow a roaming profile between machines.
+
+The tray's **Open log folder** and **Open config folder** therefore open the same
+directory on Windows. That is intended.
 
 ## config.json
 

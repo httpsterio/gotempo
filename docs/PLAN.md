@@ -299,11 +299,12 @@ done, so the next organic failure should be self-diagnosing.
   `service discovery timed out` on a known device (only safe for Just Works
   devices). Do the aging test from BUGS.md first to confirm the trigger.
 
-## Cross-platform: macOS and Windows
-The split prepared the ground; the implementations are not written. Each new OS
-needs one `internal/app/platform_<os>.go` implementing the contract (`dataDir`,
-`notify`, `openFolder`, the autostart trio, `openAdapter`), plus
-`lock_windows.go` for Windows (flock is shared via `lock_unix.go` on
-Linux/macOS). No shared files should need editing. `describeConnectErr` strings
-are BlueZ-specific and fall through harmlessly elsewhere. Note macOS BLE uses
-cgo (CoreBluetooth), so that build needs `CGO_ENABLED=1` and an SDK.
+## Cross-platform: macOS
+Windows is done (see [WINDOWS.md](WINDOWS.md)): `platform_windows.go`,
+`lock_windows.go`, ICO icons, and a cross-compiled release job. macOS still needs
+one `internal/app/platform_darwin.go` implementing the contract (`dirs`,
+`notify`, `openFolder`, the autostart trio, `openAdapter`); flock is already
+shared via `lock_unix.go`. `describeConnectErr` strings are BlueZ-specific and
+fall through harmlessly elsewhere. Note macOS BLE uses cgo (CoreBluetooth), so
+that build needs `CGO_ENABLED=1` and an SDK, and cannot be cross-compiled from
+Linux the way Windows can.

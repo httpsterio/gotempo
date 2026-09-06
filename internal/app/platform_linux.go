@@ -13,25 +13,24 @@ import (
 // This file holds the Linux/BlueZ implementations of the platform contract.
 // Mac (platform_darwin.go) and Windows (platform_windows.go) provide their own
 // versions of the same functions when those builds are added; shared code only
-// ever calls them by name. The contract is: dataDir, notify, openFolder, the
-// autostart trio, and openAdapter.
+// ever calls them by name. The contract is: dirs, notify, openFolder,
+// pairedDevices, the autostart trio, and openAdapter.
 
-// dataDir is the XDG data location: $XDG_DATA_HOME/gotempo or
-// ~/.local/share/gotempo.
-func dataDir() string {
-	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
-		return filepath.Join(x, "gotempo")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "."
-	}
-	return filepath.Join(home, ".local", "share", "gotempo")
+// dirs is the XDG layout: $XDG_CONFIG_HOME/gotempo or ~/.config/gotempo for
+// config, $XDG_DATA_HOME/gotempo or ~/.local/share/gotempo for data.
+var dirs = dirLayout{
+	configEnv: "XDG_CONFIG_HOME", configRel: []string{".config"},
+	dataEnv: "XDG_DATA_HOME", dataRel: []string{".local", "share"},
 }
 
 func notify(msg string) {
 	_ = exec.Command("notify-send", "gotempo", msg).Run()
 }
+
+// pairedDevices returns nothing on Linux: BlueZ keeps advertising visible for
+// bonded devices, so the ordinary scan already finds a paired strap. See
+// paired.go for why Windows needs its own answer.
+func pairedDevices() []KnownDevice { return nil }
 
 // openFolder opens a directory in a file browser. It prefers xdg-open, but
 // that fails when the system's inode/directory handler is misconfigured (it

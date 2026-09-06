@@ -9,16 +9,38 @@ import (
 	"time"
 )
 
-// configDir is the XDG config location: $XDG_CONFIG_HOME/gotempo or
-// ~/.config/gotempo. It is portable (os.UserConfigDir resolves the right base
-// per OS), so it stays in shared code; dataDir is the platform-specific one.
-func configDir() string {
-	base, err := os.UserConfigDir()
+const appName = "gotempo"
+
+// dirLayout says where the config and data directories live. Each platform file
+// declares one `dirs` value; the resolution below is shared, so a new OS is a
+// few lines of data rather than another implementation.
+//
+// Linux keeps the two apart (XDG). Windows points both at the same folder, which
+// is why this is a table and not os.UserConfigDir.
+type dirLayout struct {
+	configEnv, dataEnv string   // env var that overrides, "" if the OS has none
+	configRel, dataRel []string // path under the home dir otherwise
+}
+
+// resolve expands one entry of the table. The env var wins when set and
+// non-empty, matching XDG; otherwise the path is built under the home dir. It
+// runs per call rather than once at startup, so tests can relocate a directory
+// with t.Setenv.
+func resolve(env string, rel []string) string {
+	if env != "" {
+		if v := os.Getenv(env); v != "" {
+			return filepath.Join(v, appName)
+		}
+	}
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "."
 	}
-	return filepath.Join(base, "gotempo")
+	return filepath.Join(home, filepath.Join(rel...), appName)
 }
+
+func configDir() string { return resolve(dirs.configEnv, dirs.configRel) }
+func dataDir() string   { return resolve(dirs.dataEnv, dirs.dataRel) }
 
 // configPathOverride, when set (by the --config flag), replaces the default
 // config location for the whole process.

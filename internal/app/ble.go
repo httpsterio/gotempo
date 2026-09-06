@@ -345,8 +345,10 @@ func (a *App) handleBPM(bpm int) {
 
 // ── scanning ─────────────────────────────────────────────────────────────────
 
-// scanDevices runs a blocking BLE scan for the given duration and returns the
-// distinct heart-rate monitors seen.
+// scanDevices returns the distinct heart-rate monitors available to pick: the
+// ones the OS already has paired, plus whatever a blocking BLE scan of the given
+// duration turns up. Every discovery path (the tray's Rescan, --list-devices and
+// --select-device) goes through here, so they all agree.
 func (a *App) scanDevices(d time.Duration) []KnownDevice {
 	a.scanMu.Lock()
 	defer a.scanMu.Unlock()
@@ -358,6 +360,16 @@ func (a *App) scanDevices(d time.Duration) []KnownDevice {
 	}
 
 	seen := map[string]KnownDevice{}
+
+	// Devices the OS already has paired come first, and seed the map so a later
+	// advertisement cannot overwrite the friendlier name they carry. On Windows
+	// this is the only way a bonded strap turns up at all, since it stops
+	// advertising once bonded; on Linux the list is empty and nothing changes.
+	// See paired.go.
+	for _, p := range pairedDevices() {
+		seen[p.MAC] = p
+	}
+
 	var stopOnce sync.Once
 	stop := func() { stopOnce.Do(func() { _ = adapter.StopScan() }) }
 	timer := time.AfterFunc(d, stop)

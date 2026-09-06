@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	fyne.io/systray v1.12.1
+	golang.org/x/sys v0.15.0
 	tinygo.org/x/bluetooth v0.15.0
 )
 
@@ -18,5 +19,4 @@ require (
 	github.com/tinygo-org/cbgo v0.0.4 // indirect
 	github.com/tinygo-org/pio v0.3.0 // indirect
 	golang.org/x/exp v0.0.0-20241204233417-43b7b7cde48d // indirect
-	golang.org/x/sys v0.15.0 // indirect
 )

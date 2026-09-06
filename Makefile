@@ -3,7 +3,8 @@
 #   make                  build the binary
 #   make install          install binary, icon, and .desktop entry under ~/.local
 #   make uninstall        remove them
-#   make clean            remove the local build artifact
+#   make windows          cross-compile the Windows binaries (no Windows toolchain needed)
+#   make clean            remove the local build artifacts
 #   make release VERSION=v1.2.3   tag the current commit and push it (CI builds the release)
 #
 # Override the install root with PREFIX, e.g. `sudo make install PREFIX=/usr/local`.
@@ -38,7 +39,7 @@ Categories=Utility;
 endef
 export DESKTOP_ENTRY
 
-.PHONY: all build install uninstall clean release
+.PHONY: all build install uninstall clean release windows
 
 all: build
 
@@ -61,8 +62,17 @@ uninstall:
 	-update-desktop-database $(APPDIR) 2>/dev/null || true
 	-gtk-update-icon-cache -f -t $(DATADIR)/icons/hicolor 2>/dev/null || true
 
+# Cross-compiled from Linux: the Windows BLE backend is pure Go (WinRT through
+# syscall, no cgo), so only the Go compiler is needed. Mirrors the two binaries
+# the release workflow ships. -H=windowsgui keeps the tray app from opening a
+# console window, which also detaches it from the parent console, so the command
+# line is a separate console binary.
+windows:
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-H=windowsgui $(LDFLAGS)" -o $(BIN).exe .
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BIN)-cli.exe .
+
 clean:
-	rm -f $(BIN)
+	rm -f $(BIN) $(BIN).exe $(BIN)-cli.exe
 
 # Cut a release: validate, test, create an annotated tag, and push it. The
 # tag push triggers .github/workflows/release.yml, which builds the binary

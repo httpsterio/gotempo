@@ -3,11 +3,11 @@
 [![Release build](https://github.com/httpsterio/gotempo/actions/workflows/release.yml/badge.svg)](https://github.com/httpsterio/gotempo/actions/workflows/release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE.md)
 [![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)](go.mod)
-[![Platform: Linux](https://img.shields.io/badge/platform-Linux-blue)](#requirements)
+[![Platform: Linux | Windows](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)](#requirements)
 
 ![gotempo](docs/gotempo-logo.png)
 
-A small Linux tray app that connects to a Bluetooth LE heart-rate monitor, shows connection status in the tray, and writes the current BPM to a text file. Useful as an OBS text source.
+A small tray app for Linux and Windows that connects to a Bluetooth LE heart-rate monitor, shows connection status in the tray, and writes the current BPM to a text file. Useful as an OBS text source.
 
 Works with any BLE monitor using the standard GATT HR profile (0x180D / 0x2A37): Polar H10, H9, and most other chest straps and optical armbands.
 
@@ -16,14 +16,23 @@ Works with any BLE monitor using the standard GATT HR profile (0x180D / 0x2A37):
 
 ## Install
 
-Grab the latest build from [releases](https://github.com/httpsterio/gotempo/releases/latest) and extract it. Run `install.sh` to add gotempo to your applications menu, or just run `gotempo` directly. `uninstall.sh` removes it.
+Grab the latest build from [releases](https://github.com/httpsterio/gotempo/releases/latest) and extract it.
 
-Config and data live under `~/.config/gotempo` and `~/.local/share/gotempo` (see [Files & configuration](docs/CONFIGURATION.md)).
+On Linux, run `install.sh` to add gotempo to your applications menu, or just run `gotempo` directly. `uninstall.sh` removes it. Config and data live under `~/.config/gotempo` and `~/.local/share/gotempo`.
+
+On Windows, extract the zip and run `gotempo.exe`. It holds everything in `%LOCALAPPDATA%\gotempo`. The zip also contains `gotempo-cli.exe`, the same app built as a console binary, for the flags in [Command line](docs/CLI.md).
+
+See [Files & configuration](docs/CONFIGURATION.md) for the full list.
 
 
 ## Requirements
 
-- Linux with BlueZ (`bluetooth.service` running)
+Windows 10 or later. Nothing to install: the tray and the Bluetooth stack are
+both built in.
+
+On Linux:
+
+- BlueZ (`bluetooth.service` running)
 - A StatusNotifierItem system tray (XFCE, KDE, most modern panels). The app won't start without one. GNOME has no built-in tray; install the [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/) extension to get the tray icon.
 - `notify-send` (from `libnotify`), optional. Notifications are skipped if missing.
 
@@ -36,7 +45,9 @@ cd gotempo
 go build -o gotempo .
 ```
 
-Requires Go 1.24+. For desktop integration (`make install`), version stamping, and the release process, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Requires Go 1.24+. `make windows` cross-compiles the Windows binaries from Linux; the Windows Bluetooth backend is pure Go, so no Windows toolchain is involved.
+
+For desktop integration (`make install`), version stamping, and the release process, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 
 ## First launch
@@ -56,7 +67,7 @@ On first connect, accept the pairing prompt if it appears. Most straps allow one
 |---|---|
 | **Start logging** / **Stop logging** | Begin or stop logging: writes the current BPM to `gotempo-bpm.txt` and appends each reading to a per-session CSV (see [Files & configuration](docs/CONFIGURATION.md)). Greyed out when not applicable. |
 | **Device list** | Known devices (most-recently-used first) plus newly scanned ones, listed directly in the menu. Click one to switch; the current device is marked and not clickable. Up to six shown. |
-| **Rescan for new devices** | Runs a fresh 15-second scan; new monitors appear in the list. |
+| **Rescan for new devices** | Runs a fresh 15-second scan; new monitors appear in the list. On Windows the list also includes monitors already paired in Settings, which a scan cannot see. |
 | **Open log folder** | Opens the log and CSV directory in a file browser. |
 | **Open config folder** | Opens the directory holding `config.json`. |
 | **Autostart HR log** | When checked, logging starts automatically on launch. |
@@ -107,4 +118,3 @@ It also survives the Bluetooth adapter being toggled off and on, including when 
 ## Planned
 
 - macOS support
-- Windows support

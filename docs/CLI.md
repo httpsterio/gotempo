@@ -5,6 +5,11 @@ queries, for systems without a tray or for scripts and status bars. For the file
 and config it reads/writes, see [Configuration](CONFIGURATION.md). Back to the
 [README](../README.md).
 
+On Windows, use `gotempo-cli.exe` for everything on this page. `gotempo.exe` is
+built as a GUI binary so it does not open a console window, which also means it
+cannot write to the console it was launched from; the two ship side by side in
+the release zip and share one config and one running instance.
+
 | Flag | Effect |
 |---|---|
 | `--no-tray` | Run headless (no tray), connecting and logging per config, until `SIGINT`/`SIGTERM`. Needs a device set in `config.json`. |

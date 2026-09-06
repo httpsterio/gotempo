@@ -42,7 +42,35 @@ jobs:
           tar -czf "${DIST}.tar.gz" "$DIST"
           echo "ASSET=${DIST}.tar.gz" >> "$GITHUB_ENV"
 
+      # Windows is cross-compiled from this same job. The BLE backend is pure Go
+      # (WinRT via syscall, no cgo), so no Windows runner is needed to build, and
+      # a second job publishing to the same tag would race this one's release.
+      #
+      # Two binaries: the tray app is built with -H=windowsgui so it does not
+      # open a console window, which also detaches it from the parent console,
+      # so the command line ships as a separate console binary.
+      - name: Build Windows
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          VER="-X gotempo/internal/app.version=${GITHUB_REF_NAME}"
+          go build -ldflags "-w -s -H=windowsgui $VER" -o gotempo.exe .
+          go build -ldflags "-w -s $VER" -o gotempo-cli.exe .
+
+      - name: Package zip
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          DIST="gotempo-${TAG}-windows-amd64"
+          mkdir -p "$DIST"
+          cp gotempo.exe gotempo-cli.exe "$DIST/"
+          zip -r "${DIST}.zip" "$DIST"
+          echo "ZIP_ASSET=${DIST}.zip" >> "$GITHUB_ENV"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ASSET }}
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.ZIP_ASSET }}

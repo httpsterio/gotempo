@@ -1,4 +1,5 @@
 gotempo
+*.exe
 config.json
 logs/
 .claude/
