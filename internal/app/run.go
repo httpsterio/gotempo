@@ -147,7 +147,7 @@ func cmdRun(opts cliOptions) int {
 	// games get moved, so a path that validated when it was set is re-checked
 	// every launch rather than trusted. A miss disables the overlay for the run
 	// and logs why.
-	app.state.attachITG(setupITG(app.snapshotConfig().ITGmaniaModule))
+	app.p1().state.attachITG(setupITG(app.snapshotConfig().ITGmaniaModule))
 
 	// Apply the session-only logging override (config value, with headless
 	// defaulting on and --auto-log/--no-auto-log winning). Not persisted.
@@ -160,7 +160,7 @@ func cmdRun(opts cliOptions) int {
 	// --status racing startup can't read a previous run's leftover status.json
 	// (the lock is already held, so the instance counts as live). runBLE advances
 	// the phase from here.
-	app.setPhase(phaseIdle)
+	app.p1().setPhase(phaseIdle)
 
 	// Probe for an adapter, but don't fail if Bluetooth is currently off — the
 	// worker keeps retrying once it comes back.
@@ -179,7 +179,7 @@ func cmdRun(opts cliOptions) int {
 // --print-bpm it streams every reading to stdout. Headless has no device
 // picker, so a missing device is a hard error (exit 3) rather than an idle wait.
 func (a *App) runHeadless(opts cliOptions) int {
-	if a.currentMAC() == "" {
+	if a.p1().currentMAC() == "" {
 		logErrln("no device configured; set one in config.json (headless mode has no picker)")
 		return 3
 	}
@@ -188,16 +188,16 @@ func (a *App) runHeadless(opts cliOptions) int {
 		a.onReading = func(t time.Time, bpm int) { printReading(t, bpm, opts) }
 	}
 
-	go a.runBLE()
+	a.startWorkers()
 	go a.gapCheckLoop()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	// Clean shutdown: stop the worker and flush/close the open CSV session.
+	// Clean shutdown: stop the workers and flush/close any open CSV session.
 	close(a.stop)
-	a.session.Close()
+	a.closeSessions()
 	return 0
 }
 
@@ -257,11 +257,11 @@ func (a *App) runTray() {
 
 		// loop owns all subsequent UI mutation; auto-scan on startup if no
 		// device is set.
-		go t.loop(a.currentMAC() == "")
-		go a.runBLE()
+		go t.loop(a.p1().currentMAC() == "")
+		a.startWorkers()
 		go a.gapCheckLoop()
 	}, func() {
 		// onExit
-		a.session.Close()
+		a.closeSessions()
 	})
 }

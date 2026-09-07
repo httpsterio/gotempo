@@ -18,7 +18,7 @@ func TestSetLoggingClearsOutput(t *testing.T) {
 	cfg.AutoLog = true
 	a := newApp(cfg)
 
-	a.handleBPM(72) // logging on: writes the current bpm to gotempo-bpm.txt
+	a.p1().handleBPM(72) // logging on: writes the current bpm to gotempo-bpm.txt
 	if b, _ := os.ReadFile(outputPath()); string(b) != "72" {
 		t.Fatalf("bpm file = %q, want 72", b)
 	}

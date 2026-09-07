@@ -88,9 +88,13 @@ func describeConnectErr(err error) string {
 
 // ── app ──────────────────────────────────────────────────────────────────────
 
+// App owns what is shared across straps: the adapter, the config, and the
+// process-wide signals. Anything tied to one strap lives on a player.
 type App struct {
-	state   *AppState
-	session *SessionLogger
+	// players is one entry per strap being followed. There is exactly one today;
+	// two-player support adds the second without changing the code that fans out
+	// over this slice.
+	players []*player
 
 	adapterMu sync.Mutex
 	adapter   *bluetooth.Adapter // current adapter; may be re-resolved if it disappears
@@ -102,7 +106,6 @@ type App struct {
 
 	uiUpdates chan struct{}
 	stop      chan struct{}
-	switchCh  chan struct{}
 
 	// onReading, if set, is called for every reading received (before the
 	// logging gate and junk filter), used by --print-bpm. Set once before the
@@ -110,14 +113,52 @@ type App struct {
 	onReading func(time.Time, int)
 }
 
+// player is one strap: its connection loop, its live state, and its CSV log.
+// Each owns a private switchCh so that changing one strap's device does not
+// interrupt another's connection.
+type player struct {
+	app      *App
+	state    *AppState
+	session  *SessionLogger
+	switchCh chan struct{}
+}
+
 func newApp(cfg *Config) *App {
-	return &App{
-		state:     newAppState(outputPath(), cfg.AutoLog), // autostart logging if enabled
-		session:   newSessionLogger(sessionsDir(), cfg.sessionGap(), cfg.minBPM(), cfg.AutoLog),
+	a := &App{
 		cfg:       cfg,
 		uiUpdates: make(chan struct{}, 1),
 		stop:      make(chan struct{}),
-		switchCh:  make(chan struct{}, 1),
+	}
+	a.players = []*player{newPlayer(a, cfg)}
+	return a
+}
+
+func newPlayer(a *App, cfg *Config) *player {
+	return &player{
+		app:      a,
+		state:    newAppState(outputPath(), cfg.AutoLog), // autostart logging if enabled
+		session:  newSessionLogger(sessionsDir(), cfg.sessionGap(), cfg.minBPM(), cfg.AutoLog),
+		switchCh: make(chan struct{}, 1),
+	}
+}
+
+// p1 is the first strap. It marks the call sites that still assume a single
+// one: the tray icon, --print-bpm, and the headless "no device" check. Grepping
+// for it lists exactly what two-player support has left to fan out.
+func (a *App) p1() *player { return a.players[0] }
+
+// startWorkers launches one BLE connection loop per strap.
+func (a *App) startWorkers() {
+	for _, p := range a.players {
+		go p.runBLE()
+	}
+}
+
+// closeSessions ends every open CSV session at shutdown, releasing the handles.
+// The files are already complete; see SessionLogger.Close.
+func (a *App) closeSessions() {
+	for _, p := range a.players {
+		p.session.Close()
 	}
 }
 
@@ -128,10 +169,12 @@ func newApp(cfg *Config) *App {
 // at once, so it doesn't freeze on the last value (handleBPM only writes it while
 // logging is on).
 func (a *App) setLogging(v bool) {
-	a.state.setLogging(v)
-	a.session.setEnabled(v)
-	if !v {
-		a.state.clearOutput()
+	for _, p := range a.players {
+		p.state.setLogging(v)
+		p.session.setEnabled(v)
+		if !v {
+			p.state.clearOutput()
+		}
 	}
 	a.publishStatus() // reflect the new logging state at once
 }
@@ -140,8 +183,9 @@ func (a *App) setLogging(v bool) {
 // device) to status.json for `gotempo --status` to read. Assembled from the live
 // AppState plus the configured device.
 func (a *App) publishStatus() {
-	connected, logging, phase, bpm := a.state.statusView()
-	mac, name := a.currentDevice()
+	p := a.p1()
+	connected, logging, phase, bpm := p.state.statusView()
+	mac, name := p.currentDevice()
 	var dev *statusDevice
 	if mac != "" {
 		dev = &statusDevice{MAC: mac, Name: name}
@@ -152,24 +196,25 @@ func (a *App) publishStatus() {
 		Logging:   logging,
 		BPM:       bpm,
 		Device:    dev,
-		ITGmania:  a.state.itg.target(),
+		ITGmania:  p.state.itg.target(),
 	})
 }
 
 // setPhase records a connection-phase transition and publishes it.
-func (a *App) setPhase(p string) {
-	a.state.setPhase(p)
-	a.publishStatus()
+func (p *player) setPhase(phase string) {
+	p.state.setPhase(phase)
+	p.app.publishStatus()
 }
 
 // recordBPM stores the latest reading (regardless of logging) and publishes it.
-func (a *App) recordBPM(bpm int) {
-	a.state.recordBPM(bpm)
-	a.publishStatus()
+func (p *player) recordBPM(bpm int) {
+	p.state.recordBPM(bpm)
+	p.app.publishStatus()
 }
 
 // currentDevice returns the configured device's MAC and (if known) its name.
-func (a *App) currentDevice() (mac, name string) {
+func (p *player) currentDevice() (mac, name string) {
+	a := p.app
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	mac = a.cfg.Current
@@ -193,8 +238,10 @@ func (a *App) gapCheckLoop() {
 		case <-a.stop:
 			return
 		case now := <-ticker.C:
-			a.session.checkGap(now)
-			a.session.Flush()
+			for _, p := range a.players {
+				p.session.checkGap(now)
+				p.session.Flush()
+			}
 		}
 	}
 }
@@ -245,14 +292,15 @@ func (a *App) signalUI() {
 	}
 }
 
-func (a *App) signalSwitch() {
+func (p *player) signalSwitch() {
 	select {
-	case a.switchCh <- struct{}{}:
+	case p.switchCh <- struct{}{}:
 	default:
 	}
 }
 
-func (a *App) currentMAC() string {
+func (p *player) currentMAC() string {
+	a := p.app
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	return a.cfg.Current
@@ -266,7 +314,8 @@ func (a *App) snapshotConfig() Config {
 
 // switchTo changes the active device, persists the config, and wakes the BLE
 // worker so it reconnects against the new MAC.
-func (a *App) switchTo(mac, name string) {
+func (p *player) switchTo(mac, name string) {
+	a := p.app
 	a.cfgMu.Lock()
 	a.cfg.Current = mac
 	a.cfg.upsert(mac, name)
@@ -276,9 +325,9 @@ func (a *App) switchTo(mac, name string) {
 		logErrf("config save: %v", err)
 	}
 
-	a.state.onSwitch()
-	a.setPhase(phaseConnecting) // new device; worker will reconnect
-	a.signalSwitch()
+	p.state.onSwitch()
+	p.setPhase(phaseConnecting) // new device; worker will reconnect
+	p.signalSwitch()
 	a.signalUI()
 	logInfof("[BLE] switching to %s (%s)", name, mac)
 }
@@ -294,50 +343,50 @@ func (a *App) markConnected(mac string) {
 	}
 }
 
-func (a *App) handleBPM(bpm int) {
+func (p *player) handleBPM(bpm int) {
 	now := time.Now()
 	logDebugf("[BPM] reading %d", bpm)
 
 	// Raw output stream (--print-bpm): every reading as received, independent of
 	// the logging toggle and junk filter.
-	if a.onReading != nil {
-		a.onReading(now, bpm)
+	if p.app.onReading != nil {
+		p.app.onReading(now, bpm)
 	}
 
 	// Publish live status (bpm) regardless of logging, so --status and external
 	// pollers see the real reading even when logging is off.
-	a.recordBPM(bpm)
+	p.recordBPM(bpm)
 
 	// ITGmania overlay: every reading, undeduped and ungated, because the
 	// timestamp in the line is what tells the module the strap is still live.
 	// See itgmania.go.
-	a.state.itg.write(bpm, now)
+	p.state.itg.write(bpm, now)
 
-	a.state.mu.Lock()
-	logging := a.state.logging
-	a.state.mu.Unlock()
+	p.state.mu.Lock()
+	logging := p.state.logging
+	p.state.mu.Unlock()
 	if !logging {
 		return
 	}
 
 	// CSV session log: every valid reading at full cadence (no dedup), so the
 	// file keeps a row per second. Junk is filtered inside LogReading.
-	if err := a.session.LogReading(now, bpm); err != nil {
+	if err := p.session.LogReading(now, bpm); err != nil {
 		logErrf("[CSV] %v", err)
 	}
 
 	// OBS overlay file: deduped to the last distinct value, with its own
 	// stale-hold/clear lifecycle (onDisconnect/onSwitch). Independent of CSV.
-	a.state.mu.Lock()
-	if a.state.hasBPM && a.state.lastBPM == bpm {
-		a.state.mu.Unlock()
+	p.state.mu.Lock()
+	if p.state.hasBPM && p.state.lastBPM == bpm {
+		p.state.mu.Unlock()
 		return
 	}
-	a.state.lastBPM = bpm
-	a.state.hasBPM = true
-	a.state.mu.Unlock()
+	p.state.lastBPM = bpm
+	p.state.hasBPM = true
+	p.state.mu.Unlock()
 
-	a.state.putOut([]byte(strconv.Itoa(bpm)), "write")
+	p.state.putOut([]byte(strconv.Itoa(bpm)), "write")
 }
 
 // ── scanning ─────────────────────────────────────────────────────────────────
@@ -407,22 +456,22 @@ func makeSchedule() []time.Duration {
 // runBLE is the top-level worker. It (re-)reads the current device on every
 // outer iteration so a switch simply causes the inner loop to return and the
 // new MAC to be picked up.
-func (a *App) runBLE() {
+func (p *player) runBLE() {
 	for {
 		select {
-		case <-a.stop:
+		case <-p.app.stop:
 			return
 		default:
 		}
 
-		mac := a.currentMAC()
+		mac := p.currentMAC()
 		if mac == "" {
 			// No device chosen yet — idle until one is picked from the tray.
-			a.setPhase(phaseIdle)
+			p.setPhase(phaseIdle)
 			select {
-			case <-a.stop:
+			case <-p.app.stop:
 				return
-			case <-a.switchCh:
+			case <-p.switchCh:
 				continue
 			}
 		}
@@ -430,15 +479,15 @@ func (a *App) runBLE() {
 		if err != nil {
 			logErrln("[BLE] invalid mac:", err)
 			select {
-			case <-a.stop:
+			case <-p.app.stop:
 				return
-			case <-a.switchCh:
+			case <-p.switchCh:
 				continue
 			}
 		}
 		addr := bluetooth.Address{MACAddress: bluetooth.MACAddress{MAC: parsed}}
 
-		if errors.Is(a.connectLoop(addr), errStopped) {
+		if errors.Is(p.connectLoop(addr), errStopped) {
 			return
 		}
 		// errSwitched → fall through, re-read MAC.
@@ -453,22 +502,22 @@ func (a *App) runBLE() {
 // "reconnected" (via connectAndMonitor) and resets the schedule. It never gives
 // up; it returns only errStopped or errSwitched. No phase scans, so reconnection
 // never probes other devices in range.
-func (a *App) connectLoop(addr bluetooth.Address) error {
+func (p *player) connectLoop(addr bluetooth.Address) error {
 	schedule := makeSchedule()
 	attempt := 0
 	notifiedLoss := false
 
 	for {
 		select {
-		case <-a.stop:
+		case <-p.app.stop:
 			return errStopped
-		case <-a.switchCh:
+		case <-p.switchCh:
 			return errSwitched
 		default:
 		}
 
 		if attempt < len(schedule) {
-			err := a.connectOnce(addr, notifiedLoss)
+			err := p.connectOnce(addr, notifiedLoss)
 			if errors.Is(err, errStopped) {
 				return errStopped
 			}
@@ -480,18 +529,18 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 				// connectAndMonitor logs the session length on drop.
 				attempt = 0
 				notifiedLoss = false
-				a.state.onDisconnect()
+				p.state.onDisconnect()
 			} else {
 				logErrf("[BLE] connect failed: %s", describeConnectErr(err))
 				attempt++
 			}
-			a.signalUI()
+			p.app.signalUI()
 
 			if attempt < len(schedule) {
 				select {
-				case <-a.stop:
+				case <-p.app.stop:
 					return errStopped
-				case <-a.switchCh:
+				case <-p.switchCh:
 					return errSwitched
 				case <-time.After(schedule[attempt]):
 				}
@@ -506,7 +555,7 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 			notify("device lost")
 			notifiedLoss = true
 		}
-		return a.persistentConnect(addr, notifiedLoss)
+		return p.persistentConnect(addr, notifiedLoss)
 	}
 }
 
@@ -515,13 +564,13 @@ func (a *App) connectLoop(addr bluetooth.Address) error {
 // address, so it never emits scan-request probes to other devices in range. It
 // returns errStopped, errSwitched, errSessionDropped, or a raw connect/discovery
 // error.
-func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
-	a.setPhase(phaseConnecting)
-	adapter, err := a.ensureAdapter()
+func (p *player) connectOnce(addr bluetooth.Address, wasNotified bool) error {
+	p.setPhase(phaseConnecting)
+	adapter, err := p.app.ensureAdapter()
 	if err != nil {
 		return err
 	}
-	return a.connectAndMonitor(adapter, addr, wasNotified)
+	return p.connectAndMonitor(adapter, addr, wasNotified)
 }
 
 // persistentConnect retries a direct connect-by-address until the device comes
@@ -531,34 +580,34 @@ func (a *App) connectOnce(addr bluetooth.Address, wasNotified bool) error {
 // the device for connect-by-address to work; a bonded strap qualifies, and the
 // device is established by the user's tray pick / Rescan / --select-device, never
 // by a background scan. It returns errStopped or errSwitched only.
-func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error {
+func (p *player) persistentConnect(addr bluetooth.Address, wasNotified bool) error {
 	start := time.Now()
 	var lastLog time.Time // zero value forces a log on the first round
 	for {
 		select {
-		case <-a.stop:
+		case <-p.app.stop:
 			return errStopped
-		case <-a.switchCh:
+		case <-p.switchCh:
 			return errSwitched
 		default:
 		}
 
-		a.setPhase(phaseReconnecting)
+		p.setPhase(phaseReconnecting)
 		if time.Since(lastLog) >= persistLogInterval {
 			logInfof("[BLE] reconnecting to %s (%s elapsed)", addr.MAC.String(), time.Since(start).Round(time.Second))
 			lastLog = time.Now()
 		}
 
-		adapter, err := a.ensureAdapter()
+		adapter, err := p.app.ensureAdapter()
 		if err != nil {
 			logErrf("[BLE] %v", err)
-		} else if err = a.connectAndMonitor(adapter, addr, wasNotified); errors.Is(err, errStopped) || errors.Is(err, errSwitched) {
+		} else if err = p.connectAndMonitor(adapter, addr, wasNotified); errors.Is(err, errStopped) || errors.Is(err, errSwitched) {
 			return err
 		} else if errors.Is(err, errSessionDropped) {
 			// connectAndMonitor logs the session length on drop; flip state and
 			// retry immediately so a brief blip reconnects fast.
-			a.state.onDisconnect()
-			a.signalUI()
+			p.state.onDisconnect()
+			p.app.signalUI()
 			wasNotified = false
 			start = time.Now()
 			lastLog = time.Time{}
@@ -569,9 +618,9 @@ func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error 
 		}
 
 		select {
-		case <-a.stop:
+		case <-p.app.stop:
 			return errStopped
-		case <-a.switchCh:
+		case <-p.switchCh:
 			return errSwitched
 		case <-time.After(persistentRetryInterval):
 		}
@@ -584,7 +633,7 @@ func (a *App) persistentConnect(addr bluetooth.Address, wasNotified bool) error 
 // on the connection attempt, so it runs in a goroutine and is abandoned on
 // stop/switch. An abandoned attempt that later connects is disconnected so it
 // does not hold the device's single BLE slot.
-func (a *App) connectDevice(adapter *bluetooth.Adapter, addr bluetooth.Address) (bluetooth.Device, error) {
+func (p *player) connectDevice(adapter *bluetooth.Adapter, addr bluetooth.Address) (bluetooth.Device, error) {
 	type result struct {
 		dev bluetooth.Device
 		err error
@@ -603,9 +652,9 @@ func (a *App) connectDevice(adapter *bluetooth.Adapter, addr bluetooth.Address) 
 		return bluetooth.Device{}, sentinel
 	}
 	select {
-	case <-a.stop:
+	case <-p.app.stop:
 		return abandon(errStopped)
-	case <-a.switchCh:
+	case <-p.switchCh:
 		return abandon(errSwitched)
 	case r := <-ch:
 		return r.dev, r.err
@@ -616,9 +665,9 @@ func (a *App) connectDevice(adapter *bluetooth.Adapter, addr bluetooth.Address) 
 // and characteristic, enables notifications, and blocks until the session ends
 // or the app stops/switches. It always returns a sentinel error: errStopped,
 // errSwitched, errSessionDropped, or a raw connect/discovery error.
-func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Address, wasNotified bool) error {
+func (p *player) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Address, wasNotified bool) error {
 	logInfof("[BLE] connecting to %s…", addr.MAC.String())
-	device, err := a.connectDevice(adapter, addr)
+	device, err := p.connectDevice(adapter, addr)
 	if err != nil {
 		return err
 	}
@@ -657,7 +706,7 @@ func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Addre
 		} else {
 			bpm = int(buf[1])
 		}
-		a.handleBPM(bpm)
+		p.handleBPM(bpm)
 	}); err != nil {
 		_ = device.Disconnect()
 		return err
@@ -665,13 +714,13 @@ func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Addre
 
 	logInfoln("[BLE] connected")
 	connectedAt := time.Now()
-	a.state.onConnect()
-	a.setPhase(phaseConnected)
-	a.markConnected(addr.MAC.String())
+	p.state.onConnect()
+	p.setPhase(phaseConnected)
+	p.app.markConnected(addr.MAC.String())
 	if wasNotified {
 		notify("reconnected")
 	}
-	a.signalUI()
+	p.app.signalUI()
 
 	cleanup := func() {
 		_ = chars[0].EnableNotifications(nil)
@@ -682,10 +731,10 @@ func (a *App) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Addre
 	defer ticker.Stop()
 	for {
 		select {
-		case <-a.stop:
+		case <-p.app.stop:
 			cleanup()
 			return errStopped
-		case <-a.switchCh:
+		case <-p.switchCh:
 			cleanup()
 			return errSwitched
 		case <-ticker.C:

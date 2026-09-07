@@ -95,7 +95,7 @@ func slotLabel(e deviceEntry, current bool) string {
 }
 
 func (t *tray) refresh() {
-	connected, logging := t.app.state.snapshot()
+	connected, logging := t.app.p1().state.snapshot()
 
 	switch {
 	case !connected:
@@ -132,7 +132,7 @@ func (t *tray) refresh() {
 // count.
 func (t *tray) renderSwitch() {
 	cfg := t.app.snapshotConfig()
-	connected, _ := t.app.state.snapshot()
+	connected, _ := t.app.p1().state.snapshot()
 	entries := buildEntries(cfg, t.lastScanned)
 	for i, s := range t.switchSlots {
 		if i < len(entries) {
@@ -187,7 +187,7 @@ func (t *tray) loop(autoScan bool) {
 		case <-t.app.uiUpdates:
 			t.refresh()
 		case <-t.mLog.ClickedCh:
-			connected, logging := t.app.state.snapshot()
+			connected, logging := t.app.p1().state.snapshot()
 			if connected {
 				t.app.setLogging(!logging)
 			}
@@ -224,10 +224,10 @@ func (t *tray) loop(autoScan bool) {
 		case i := <-t.slotClicks:
 			mac := t.slotMACs[i]
 			name := t.slotNames[i]
-			if mac == "" || strings.EqualFold(mac, t.app.currentMAC()) {
+			if mac == "" || strings.EqualFold(mac, t.app.p1().currentMAC()) {
 				break
 			}
-			t.app.switchTo(mac, name)
+			t.app.p1().switchTo(mac, name)
 		case <-t.mRescan.ClickedCh:
 			t.startScan()
 		case res := <-t.scanDone:
