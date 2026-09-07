@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -113,7 +112,7 @@ type App struct {
 
 func newApp(cfg *Config) *App {
 	return &App{
-		state:     &AppState{logging: cfg.AutoLog}, // autostart logging if enabled
+		state:     newAppState(outputPath(), cfg.AutoLog), // autostart logging if enabled
 		session:   newSessionLogger(sessionsDir(), cfg.sessionGap(), cfg.minBPM(), cfg.AutoLog),
 		cfg:       cfg,
 		uiUpdates: make(chan struct{}, 1),
@@ -153,7 +152,7 @@ func (a *App) publishStatus() {
 		Logging:   logging,
 		BPM:       bpm,
 		Device:    dev,
-		ITGmania:  itgTarget(),
+		ITGmania:  a.state.itg.target(),
 	})
 }
 
@@ -312,7 +311,7 @@ func (a *App) handleBPM(bpm int) {
 	// ITGmania overlay: every reading, undeduped and ungated, because the
 	// timestamp in the line is what tells the module the strap is still live.
 	// See itgmania.go.
-	writeITG(bpm, now)
+	a.state.itg.write(bpm, now)
 
 	a.state.mu.Lock()
 	logging := a.state.logging
@@ -338,9 +337,7 @@ func (a *App) handleBPM(bpm int) {
 	a.state.hasBPM = true
 	a.state.mu.Unlock()
 
-	if err := os.WriteFile(outputPath(), []byte(strconv.Itoa(bpm)), 0644); err != nil {
-		logErrf("[BPM] could not write output: %v", err)
-	}
+	a.state.putOut([]byte(strconv.Itoa(bpm)), "write")
 }
 
 // ── scanning ─────────────────────────────────────────────────────────────────

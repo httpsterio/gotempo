@@ -39,17 +39,24 @@ import (
 
 const itgHRFile = "hr.txt"
 
-var (
-	itgMu sync.Mutex
-	// itgPath is the resolved hr.txt for this run, empty when the feature is off
-	// (no itgmania_module set) or the module was missing at startup. Package
-	// level like the other output paths, so the clear paths in AppState reach it
-	// without a back-reference to App.
-	itgPath string
-	// itgErrLogged suppresses repeat write errors. Writes run at ~1Hz, so a
+// itgWriter owns one hr.txt. There is one per connected strap rather than one
+// per process: a two-player cabinet writes a separate file per side, and the
+// AppState that blanks the panel on disconnect holds its own writer, so the
+// clear paths reach the right file without consulting anything global.
+//
+// A nil *itgWriter and one with an empty path are both "overlay off", and every
+// method below is a no-op in that state. So a caller that never configured an
+// overlay (a run without itgmania_module, or a test building an AppState
+// directly) needs no special case.
+type itgWriter struct {
+	mu sync.Mutex
+	// path is the resolved hr.txt for this run, empty when the feature is off
+	// (no itgmania_module set) or the module was missing at startup.
+	path string
+	// errLogged suppresses repeat write errors. Writes run at ~1Hz, so a
 	// directory that disappears mid-run would otherwise log 3600 lines an hour.
-	itgErrLogged bool
-)
+	errLogged bool
+}
 
 // itgHRPathFor derives the target from the module's location: hr.txt beside
 // gotempo.lua.
@@ -63,46 +70,45 @@ func itgHRPathFor(module string) string {
 	return filepath.Join(filepath.Dir(module), itgHRFile)
 }
 
-// setupITG validates the configured module path once, at startup, and enables
-// the overlay for the run. An empty path means the feature is off. A path that
+// setupITG validates the configured module path once, at startup, and returns
+// the writer for the run. An empty path means the feature is off. A path that
 // isn't there disables it and says so: writing into a dead path would leave the
 // app looking like it worked while nothing reached the game.
 //
 // It never creates the directory. os.WriteFile's O_CREATE makes the file only,
 // so a wrong path keeps failing loudly instead of building a phantom tree.
-func setupITG(module string) {
-	itgMu.Lock()
-	defer itgMu.Unlock()
-	itgPath, itgErrLogged = "", false
-
+//
+// It always returns a usable writer; a disabled one simply has no path.
+func setupITG(module string) *itgWriter {
+	w := &itgWriter{}
 	if module == "" {
-		return
+		return w
 	}
 	info, err := os.Stat(module)
 	if err != nil {
 		logErrf("[ITG] module not found, overlay disabled: %s", module)
-		return
+		return w
 	}
 	if info.IsDir() {
 		logErrf("[ITG] itgmania_module is a directory, want the gotempo.lua file: %s", module)
-		return
+		return w
 	}
-	itgPath = itgHRPathFor(module)
-	logInfof("[ITG] writing %s", itgPath)
+	w.path = itgHRPathFor(module)
+	logInfof("[ITG] writing %s", w.path)
+	return w
 }
 
-// itgEnabled reports whether the overlay resolved to a usable path.
-func itgEnabled() bool {
-	itgMu.Lock()
-	defer itgMu.Unlock()
-	return itgPath != ""
-}
+// enabled reports whether the overlay resolved to a usable path.
+func (w *itgWriter) enabled() bool { return w.target() != "" }
 
-// itgTarget returns the resolved hr.txt path, empty when the overlay is off.
-func itgTarget() string {
-	itgMu.Lock()
-	defer itgMu.Unlock()
-	return itgPath
+// target returns the resolved hr.txt path, empty when the overlay is off.
+func (w *itgWriter) target() string {
+	if w == nil {
+		return ""
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.path
 }
 
 // itgLine formats one reading. The time must be local: see the note above.
@@ -114,43 +120,40 @@ func itgLine(bpm int, now time.Time) string {
 	)
 }
 
-// writeITG publishes one reading, for every reading received. os.WriteFile is
-// the right call here: it truncates in place with a single Write, keeping the
-// same inode and directory entry. The temp-file-and-rename idiom would be worse,
+// write publishes one reading, for every reading received. os.WriteFile is the
+// right call here: it truncates in place with a single Write, keeping the same
+// inode and directory entry. The temp-file-and-rename idiom would be worse,
 // since StepMania's RageFileManager caches directory listings and may not pick
 // the swapped entry up promptly.
-func writeITG(bpm int, now time.Time) {
-	itgMu.Lock()
-	defer itgMu.Unlock()
-	if itgPath == "" {
-		return
-	}
-	if err := os.WriteFile(itgPath, []byte(itgLine(bpm, now)), 0644); err != nil {
-		if !itgErrLogged {
-			logErrf("[ITG] could not write %s: %v", itgPath, err)
-			itgErrLogged = true
-		}
-		return
-	}
-	itgErrLogged = false
+func (w *itgWriter) write(bpm int, now time.Time) {
+	w.put([]byte(itgLine(bpm, now)), "write")
 }
 
-// clearITG truncates hr.txt so the panel hides within one poll instead of
-// waiting out the module's 60s staleness threshold. An empty file reads as no
-// reading, same as a 0. Called on disconnect and device switch, deliberately not
-// when logging is turned off.
-func clearITG() {
-	itgMu.Lock()
-	defer itgMu.Unlock()
-	if itgPath == "" {
+// clear truncates hr.txt so the panel hides within one poll instead of waiting
+// out the module's 60s staleness threshold. An empty file reads as no reading,
+// same as a 0. Called on disconnect and device switch, deliberately not when
+// logging is turned off.
+func (w *itgWriter) clear() {
+	w.put([]byte{}, "clear")
+}
+
+// put is the one write path, shared so the disabled check and the
+// error-suppression state cannot drift between writing and clearing.
+func (w *itgWriter) put(data []byte, what string) {
+	if w == nil {
 		return
 	}
-	if err := os.WriteFile(itgPath, []byte{}, 0644); err != nil {
-		if !itgErrLogged {
-			logErrf("[ITG] could not clear %s: %v", itgPath, err)
-			itgErrLogged = true
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.path == "" {
+		return
+	}
+	if err := os.WriteFile(w.path, data, 0644); err != nil {
+		if !w.errLogged {
+			logErrf("[ITG] could not %s %s: %v", what, w.path, err)
+			w.errLogged = true
 		}
 		return
 	}
-	itgErrLogged = false
+	w.errLogged = false
 }

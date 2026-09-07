@@ -71,6 +71,18 @@ func writeStatus(st appStatus) {
 }
 
 type AppState struct {
+	// outPath is the OBS BPM file this state owns, and itg the ITGmania overlay
+	// writer. They are per-state rather than package-level so that two straps
+	// can each publish to their own files, and so the clear paths below reach
+	// the right ones without consulting anything global.
+	//
+	// Both are installed during startup, before any goroutine that reads them is
+	// started, and never mutated afterwards. Goroutine creation is the
+	// happens-before edge, so neither needs the mutex. An empty outPath and a
+	// nil itg are both inert, which keeps a bare AppState{} usable.
+	outPath string
+	itg     *itgWriter
+
 	mu         sync.Mutex
 	connected  bool
 	logging    bool
@@ -79,6 +91,27 @@ type AppState struct {
 	lastBPM    int
 	hasBPM     bool
 	staleTimer *time.Timer
+}
+
+func newAppState(outPath string, logging bool) *AppState {
+	return &AppState{outPath: outPath, logging: logging}
+}
+
+// attachITG installs the overlay writer. It is separate from the constructor
+// because --itgmania-module can still change the configured path after the App
+// is built; see cmdRun. Startup-only, per the field comment above.
+func (s *AppState) attachITG(w *itgWriter) { s.itg = w }
+
+// putOut replaces the OBS BPM file's contents. Callers may hold s.mu: outPath is
+// immutable so this takes no lock. An empty outPath means this state has no OBS
+// file, and the write is skipped rather than landing in the working directory.
+func (s *AppState) putOut(data []byte, what string) {
+	if s.outPath == "" {
+		return
+	}
+	if err := os.WriteFile(s.outPath, data, 0644); err != nil {
+		logErrf("[BPM] could not %s output: %v", what, err)
+	}
 }
 
 func (s *AppState) snapshot() (connected, logging bool) {
@@ -146,10 +179,8 @@ func (s *AppState) onDisconnect() {
 			return
 		}
 		s.hasBPM = false
-		if err := os.WriteFile(outputPath(), []byte{}, 0644); err != nil {
-			logErrf("[BPM] could not clear output: %v", err)
-		}
-		clearITG()
+		s.putOut([]byte{}, "clear")
+		s.itg.clear()
 	})
 	s.mu.Unlock()
 }
@@ -159,7 +190,7 @@ func (s *AppState) onSwitch() {
 	s.connected = false
 	s.mu.Unlock()
 	s.clearOutput()
-	clearITG()
+	s.itg.clear()
 }
 
 // clearOutput empties the OBS BPM file and resets the dedup/stale state, without
@@ -179,7 +210,5 @@ func (s *AppState) clearOutput() {
 		s.staleTimer = nil
 	}
 	s.mu.Unlock()
-	if err := os.WriteFile(outputPath(), []byte{}, 0644); err != nil {
-		logErrf("[BPM] could not clear output: %v", err)
-	}
+	s.putOut([]byte{}, "clear")
 }

@@ -147,7 +147,7 @@ func cmdRun(opts cliOptions) int {
 	// games get moved, so a path that validated when it was set is re-checked
 	// every launch rather than trusted. A miss disables the overlay for the run
 	// and logs why.
-	setupITG(app.snapshotConfig().ITGmaniaModule)
+	app.state.attachITG(setupITG(app.snapshotConfig().ITGmaniaModule))
 
 	// Apply the session-only logging override (config value, with headless
 	// defaulting on and --auto-log/--no-auto-log winning). Not persisted.
