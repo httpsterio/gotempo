@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -215,16 +216,61 @@ func TestBuildEntriesMergeAndCap(t *testing.T) {
 }
 
 func TestSlotLabel(t *testing.T) {
-	cur := slotLabel(deviceEntry{mac: "M", name: "Foo", known: true}, true)
+	const unassigned = -1
+
+	cur := slotLabel(deviceEntry{mac: "M", name: "Foo", known: true}, slotP1, false)
 	if cur != "Foo (current)" {
 		t.Errorf("current label = %q", cur)
 	}
-	nw := slotLabel(deviceEntry{mac: "M", name: "Foo", known: false}, false)
+	nw := slotLabel(deviceEntry{mac: "M", name: "Foo", known: false}, unassigned, false)
 	if nw != "Foo — new" {
 		t.Errorf("new label = %q", nw)
 	}
-	noName := slotLabel(deviceEntry{mac: "24:AC", name: "", known: true}, false)
+	noName := slotLabel(deviceEntry{mac: "24:AC", name: "", known: true}, unassigned, false)
 	if noName != "24:AC" {
 		t.Errorf("empty-name label = %q", noName)
+	}
+}
+
+// In two-player mode the marker replaces the "(current)"/age suffix: which side
+// a strap is on is the only thing worth reading once two are in play.
+func TestSlotLabelTwoPlayerMarkers(t *testing.T) {
+	const unassigned = -1
+	e := deviceEntry{mac: "M", name: "Polar H10", known: true, lastUsed: "2026-06-01T10:00:00Z"}
+
+	if got, want := slotLabel(e, slotP1, true), "[P1] Polar H10"; got != want {
+		t.Errorf("P1 label = %q, want %q", got, want)
+	}
+	if got, want := slotLabel(e, slotP2, true), "[P2] Polar H10"; got != want {
+		t.Errorf("P2 label = %q, want %q", got, want)
+	}
+	// An unassigned strap keeps the ordinary description, so the list still
+	// tells you which ones you have used recently.
+	if got := slotLabel(e, unassigned, true); !strings.HasPrefix(got, "Polar H10 — ") {
+		t.Errorf("unassigned label = %q, want the ordinary description", got)
+	}
+}
+
+// An assigned strap must survive the row cap. It sorts last by last-used when it
+// has never connected, so without the pin an operator could assign a new belt
+// and find it missing from the list, with no way to unassign it.
+func TestBuildEntriesKeepsAssignedInView(t *testing.T) {
+	cfg := Config{TwoPlayer: true, CurrentP2: "NEW"}
+	// Enough recently-used devices to fill every row on their own.
+	for i := 0; i < maxSwitchSlots+2; i++ {
+		cfg.Known = append(cfg.Known, KnownDevice{
+			MAC:      string(rune('A' + i)),
+			LastUsed: "2026-06-05T10:00:00Z",
+		})
+	}
+	// The assigned one has never connected, so it sorts last.
+	cfg.Known = append(cfg.Known, KnownDevice{MAC: "NEW", Name: "Fresh Belt"})
+
+	entries := buildEntries(cfg, nil)
+	if len(entries) != maxSwitchSlots {
+		t.Fatalf("got %d entries, want the cap %d", len(entries), maxSwitchSlots)
+	}
+	if entries[0].mac != "NEW" {
+		t.Errorf("assigned strap is not first: %+v", entries[0])
 	}
 }

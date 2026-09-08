@@ -258,6 +258,11 @@ func (a *App) runTray() {
 		// slots are pre-created here so they keep their position between the
 		// logging controls and the toggles, then shown/hidden as devices appear.
 		systray.AddSeparator()
+
+		// Directly above the device rows, so it reads as a heading for them
+		// rather than another unrelated preference down with the toggles.
+		t.mTwoPlayer = systray.AddMenuItemCheckbox("Two-player mode", "", a.snapshotConfig().TwoPlayer)
+
 		for i := 0; i < maxSwitchSlots; i++ {
 			slot := systray.AddMenuItem("", "")
 			slot.Hide()
@@ -291,7 +296,7 @@ func (a *App) runTray() {
 
 		// loop owns all subsequent UI mutation; auto-scan on startup if no
 		// device is set.
-		go t.loop(a.p1().currentMAC() == "")
+		go t.loop(!a.anyDeviceConfigured())
 		a.startWorkers()
 		go a.gapCheckLoop()
 	}, func() {

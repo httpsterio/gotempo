@@ -198,8 +198,10 @@ func (p *player) effectiveMAC() string {
 	return p.currentMAC()
 }
 
-// p1 is the first strap. It marks the call sites that still assume a single one,
-// now just the tray. Grepping for it lists what is left to fan out.
+// p1 is the first strap, for the places that mean it specifically rather than
+// "some strap": status.json's top-level fields, the single-strap tray click
+// path, and reading the logging flag, which is process-wide and which every
+// player holds the same value of.
 func (a *App) p1() *player { return a.players[slotP1] }
 
 // attachITG resolves the overlay target for every strap from the one configured
@@ -233,6 +235,96 @@ func (a *App) anyDeviceConfigured() bool {
 		}
 	}
 	return false
+}
+
+// isConnected reports whether this strap has a live connection.
+func (p *player) isConnected() bool {
+	connected, _ := p.state.snapshot()
+	return connected
+}
+
+// anyConnected reports whether any strap is connected. The tray has one icon
+// for the whole app, so one live strap is enough to show as connected.
+func (a *App) anyConnected() bool {
+	for _, p := range a.players {
+		if p.isConnected() {
+			return true
+		}
+	}
+	return false
+}
+
+// setTwoPlayer turns the second strap on or off, persists it, and wakes P2's
+// loop so it picks up or drops its strap. P1 is deliberately untouched: toggling
+// the mode must never interrupt a session already running on the first strap.
+func (a *App) setTwoPlayer(v bool) {
+	a.cfgMu.Lock()
+	if a.cfg.TwoPlayer == v {
+		a.cfgMu.Unlock()
+		return
+	}
+	a.cfg.TwoPlayer = v
+	snap := a.cfg.clone()
+	a.cfgMu.Unlock()
+	if err := saveConfig(snap); err != nil {
+		logErrf("config save: %v", err)
+	}
+
+	a.players[slotP2].reassigned()
+	a.signalUI()
+	logInfof("[BLE] two-player mode %s", onOff(v))
+}
+
+// assignSlots applies a complete slot assignment: both slots at once, persisted
+// once, waking only the loops whose strap actually changed. The tray's cycling
+// can move a strap into a slot and displace another in the same click, so this
+// has to be one operation rather than two switchTo calls.
+//
+// learned is the strap the user just acted on, recorded in Known so its name
+// survives a rescan. The other slot's strap is already known.
+func (a *App) assignSlots(macs [2]string, learned KnownDevice) {
+	a.cfgMu.Lock()
+	var old [2]string
+	for slot := range macs {
+		old[slot] = a.cfg.currentFor(slot)
+		a.cfg.setCurrentFor(slot, macs[slot])
+	}
+	if learned.MAC != "" {
+		a.cfg.upsert(learned.MAC, learned.Name)
+	}
+	snap := a.cfg.clone()
+	a.cfgMu.Unlock()
+	if err := saveConfig(snap); err != nil {
+		logErrf("config save: %v", err)
+	}
+
+	for slot, p := range a.players {
+		if strings.EqualFold(old[slot], macs[slot]) {
+			continue
+		}
+		p.reassigned()
+		logInfof("[BLE] P%d is now %s", slot+1, orNone(macs[slot]))
+	}
+	a.signalUI()
+}
+
+// reassigned drops whatever this strap was doing and wakes its loop to pick up
+// its new device, or to idle when it no longer has one.
+func (p *player) reassigned() {
+	p.state.onSwitch()
+	if p.effectiveMAC() == "" {
+		p.setPhase(phaseIdle)
+	} else {
+		p.setPhase(phaseConnecting)
+	}
+	p.signalSwitch()
+}
+
+func onOff(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
 }
 
 // startWorkers launches one BLE connection loop per strap.

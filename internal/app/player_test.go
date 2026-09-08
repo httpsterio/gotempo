@@ -213,3 +213,139 @@ func TestAnyDeviceConfigured(t *testing.T) {
 		t.Error("no slot assigned, but reported as configured")
 	}
 }
+
+const unassignedSlot = -1
+
+func TestAssignedSlot(t *testing.T) {
+	cfg := Config{Current: "AA", CurrentP2: "BB"}
+	for _, c := range []struct {
+		mac  string
+		want int
+	}{
+		{"AA", slotP1},
+		{"aa", slotP1}, // MACs are compared case-insensitively everywhere else too
+		{"BB", slotP2},
+		{"CC", unassignedSlot},
+		{"", unassignedSlot}, // an empty slot must not match an unassigned strap
+	} {
+		if got := assignedSlot(cfg, c.mac); got != c.want {
+			t.Errorf("assignedSlot(%q) = %d, want %d", c.mac, got, c.want)
+		}
+	}
+}
+
+// One click walks a strap through every state and back to the start, which is
+// what makes the tray's single-click assignment learnable.
+func TestCycleAssignmentIsAFullLoop(t *testing.T) {
+	cfg := Config{}
+	for i, want := range [][2]string{
+		{"AA", ""}, // unassigned -> P1
+		{"", "AA"}, // P1 -> P2
+		{"", ""},   // P2 -> unassigned
+		{"AA", ""}, // and round again
+	} {
+		got := cycleAssignment(cfg, "AA")
+		if got != want {
+			t.Fatalf("click %d: got %v, want %v", i+1, got, want)
+		}
+		cfg.Current, cfg.CurrentP2 = got[slotP1], got[slotP2]
+	}
+}
+
+// A slot holds one strap and a strap holds one slot. Taking an occupied slot
+// displaces whoever was there, so the list can never show two straps claiming
+// P1, or the same strap on both sides.
+func TestCycleAssignmentDisplaces(t *testing.T) {
+	// BB holds P1; AA cycles into it and must evict BB entirely.
+	got := cycleAssignment(Config{Current: "BB"}, "AA")
+	if want := [2]string{"AA", ""}; got != want {
+		t.Errorf("into an occupied P1: got %v, want %v", got, want)
+	}
+
+	// AA on P1 moving to P2 must evict BB from P2 and leave P1 empty, not
+	// leave AA on both.
+	got = cycleAssignment(Config{Current: "AA", CurrentP2: "BB"}, "AA")
+	if want := [2]string{"", "AA"}; got != want {
+		t.Errorf("P1 to an occupied P2: got %v, want %v", got, want)
+	}
+}
+
+// The end-to-end tray path: cycling persists, and wakes only the loops whose
+// strap actually changed.
+func TestAssignSlotsWakesOnlyChangedLoops(t *testing.T) {
+	a, p1, p2 := twoPlayerApp(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	drain := func() {
+		select {
+		case <-p1.switchCh:
+		default:
+		}
+		select {
+		case <-p2.switchCh:
+		default:
+		}
+	}
+	drain()
+
+	// Reassign P2 only; P1's live connection must not be disturbed.
+	a.assignSlots([2]string{"AA:AA:AA:AA:AA:AA", "CC:CC:CC:CC:CC:CC"}, KnownDevice{MAC: "CC:CC:CC:CC:CC:CC"})
+
+	select {
+	case <-p1.switchCh:
+		t.Error("reassigning P2 interrupted P1's connection")
+	default:
+	}
+	select {
+	case <-p2.switchCh:
+	default:
+		t.Error("P2 was reassigned but its loop was not woken")
+	}
+	if got := p2.effectiveMAC(); got != "CC:CC:CC:CC:CC:CC" {
+		t.Errorf("P2 = %q, want the new strap", got)
+	}
+}
+
+// Turning the mode off must not disturb the first strap: someone recording a
+// session on P1 should not lose it because they toggled two-player.
+func TestSetTwoPlayerLeavesP1Alone(t *testing.T) {
+	a, p1, p2 := twoPlayerApp(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	select {
+	case <-p1.switchCh:
+	default:
+	}
+
+	a.setTwoPlayer(false)
+
+	select {
+	case <-p1.switchCh:
+		t.Error("toggling two-player mode interrupted P1")
+	default:
+	}
+	select {
+	case <-p2.switchCh:
+	default:
+		t.Error("toggling the mode did not wake P2 to drop its strap")
+	}
+	if got := p2.effectiveMAC(); got != "" {
+		t.Errorf("P2 still following %q after the mode went off", got)
+	}
+}
+
+// The tray has one icon for the whole app, so one live strap shows connected.
+func TestAnyConnected(t *testing.T) {
+	a, p1, p2 := twoPlayerApp(t)
+
+	if a.anyConnected() {
+		t.Error("nothing connected, but anyConnected() is true")
+	}
+	p2.state.setConnected(true)
+	if !a.anyConnected() {
+		t.Error("P2 connected, but anyConnected() is false")
+	}
+	p2.state.setConnected(false)
+	p1.state.setConnected(true)
+	if !a.anyConnected() {
+		t.Error("P1 connected, but anyConnected() is false")
+	}
+}
