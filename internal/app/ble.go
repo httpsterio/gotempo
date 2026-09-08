@@ -91,9 +91,9 @@ func describeConnectErr(err error) string {
 // App owns what is shared across straps: the adapter, the config, and the
 // process-wide signals. Anything tied to one strap lives on a player.
 type App struct {
-	// players is one entry per strap being followed. There is exactly one today;
-	// two-player support adds the second without changing the code that fans out
-	// over this slice.
+	// players is one entry per slot, indexed by it. Both always exist; P2 simply
+	// idles while two-player mode is off, which is cheaper and less racy than
+	// starting and stopping its goroutine.
 	players []*player
 
 	adapterMu sync.Mutex
@@ -106,11 +106,6 @@ type App struct {
 
 	uiUpdates chan struct{}
 	stop      chan struct{}
-
-	// onReading, if set, is called for every reading received (before the
-	// logging gate and junk filter), used by --print-bpm. Set once before the
-	// worker starts, then read-only.
-	onReading func(time.Time, int)
 }
 
 // player is one strap: its connection loop, its live state, and its CSV log.
@@ -118,9 +113,24 @@ type App struct {
 // interrupt another's connection.
 type player struct {
 	app      *App
+	slot     int // slotP1 or slotP2; picks this strap's config keys and file names
 	state    *AppState
 	session  *SessionLogger
 	switchCh chan struct{}
+
+	// onReading, if set, is called for every reading this strap receives (before
+	// the logging gate and junk filter), used by --print-bpm. It is per-strap so
+	// that streaming to stdout stays one unambiguous series even when two are
+	// connected; --player picks which. Set once before the worker starts, then
+	// read-only.
+	onReading func(time.Time, int)
+
+	// overrideMu guards override, the transient strap assignment. It is set by
+	// something outside the operator's config (the ITGmania module, once that
+	// lands) and is never persisted, so quitting returns to config.json. Empty
+	// means "no override", and the config value is used.
+	overrideMu sync.Mutex
+	override   string
 }
 
 func newApp(cfg *Config) *App {
@@ -129,23 +139,101 @@ func newApp(cfg *Config) *App {
 		uiUpdates: make(chan struct{}, 1),
 		stop:      make(chan struct{}),
 	}
-	a.players = []*player{newPlayer(a, cfg)}
+	a.players = []*player{newPlayer(a, slotP1, cfg), newPlayer(a, slotP2, cfg)}
 	return a
 }
 
-func newPlayer(a *App, cfg *Config) *player {
-	return &player{
+func newPlayer(a *App, slot int, cfg *Config) *player {
+	p := &player{
 		app:      a,
-		state:    newAppState(outputPath(), cfg.AutoLog), // autostart logging if enabled
-		session:  newSessionLogger(sessionsDir(), cfg.sessionGap(), cfg.minBPM(), cfg.AutoLog),
+		slot:     slot,
+		state:    newAppState(outputPath(slot), cfg.AutoLog), // autostart logging if enabled
 		switchCh: make(chan struct{}, 1),
+	}
+	p.session = newSessionLogger(sessionsDir(), p.sessionSuffix, cfg.sessionGap(), cfg.minBPM(), cfg.AutoLog)
+	return p
+}
+
+// sessionSuffix names this strap's CSV files. With one strap they are
+// unsuffixed, exactly as before two-player support existed; with two, each
+// carries -p1/-p2 so a human reading the directory can tell whose is whose.
+//
+// Note this is not slotSuffix: the machine-read files (gotempo-bpm.txt, hr.txt)
+// keep fixed names per slot so an OBS source or a Lua module never sees a path
+// move, while these are named for whoever reads the folder.
+func (p *player) sessionSuffix() string {
+	if !p.app.snapshotConfig().TwoPlayer {
+		return ""
+	}
+	return "-p" + strconv.Itoa(p.slot+1)
+}
+
+// setOverride installs or clears the transient strap assignment and wakes the
+// connection loop so it picks the change up. Passing "" restores the configured
+// strap.
+func (p *player) setOverride(mac string) {
+	p.overrideMu.Lock()
+	changed := p.override != mac
+	p.override = mac
+	p.overrideMu.Unlock()
+	if !changed {
+		return
+	}
+	p.state.onSwitch()
+	p.setPhase(phaseConnecting)
+	p.signalSwitch()
+	p.app.signalUI()
+}
+
+// effectiveMAC is the strap this slot should be following: the transient
+// override when one is set, otherwise the operator's config. Empty means idle,
+// which is how P2 sits quiet while two-player mode is off.
+func (p *player) effectiveMAC() string {
+	p.overrideMu.Lock()
+	override := p.override
+	p.overrideMu.Unlock()
+	if override != "" {
+		return override
+	}
+	return p.currentMAC()
+}
+
+// p1 is the first strap. It marks the call sites that still assume a single one,
+// now just the tray. Grepping for it lists what is left to fan out.
+func (a *App) p1() *player { return a.players[slotP1] }
+
+// attachITG resolves the overlay target for every strap from the one configured
+// module path. Each writes its own file beside gotempo.lua: hr.txt and
+// hr-p2.txt. A missing or wrong module disables the overlay for all of them.
+func (a *App) attachITG(module string) {
+	base := setupITG(module, slotP1) // validates, and logs why a bad path is rejected
+	for _, p := range a.players {
+		w := base
+		if p.slot != slotP1 {
+			w = base.sibling(module, p.slot)
+		}
+		p.state.attachITG(w)
+
+		// Announce only files that will actually be written. An idle slot has a
+		// resolved path but never publishes to it, and saying otherwise sends
+		// someone looking for an hr-p2.txt that will never appear.
+		if t := w.target(); t != "" && p.effectiveMAC() != "" {
+			logInfof("[ITG] writing %s", t)
+		}
 	}
 }
 
-// p1 is the first strap. It marks the call sites that still assume a single
-// one: the tray icon, --print-bpm, and the headless "no device" check. Grepping
-// for it lists exactly what two-player support has left to fan out.
-func (a *App) p1() *player { return a.players[0] }
+// anyDeviceConfigured reports whether any slot has a strap to follow. Headless
+// runs use it: a cabinet set up with only P2 is unusual but valid, so the check
+// must not assume the first slot is the populated one.
+func (a *App) anyDeviceConfigured() bool {
+	for _, p := range a.players {
+		if p.effectiveMAC() != "" {
+			return true
+		}
+	}
+	return false
+}
 
 // startWorkers launches one BLE connection loop per strap.
 func (a *App) startWorkers() {
@@ -185,19 +273,37 @@ func (a *App) setLogging(v bool) {
 func (a *App) publishStatus() {
 	p := a.p1()
 	connected, logging, phase, bpm := p.state.statusView()
-	mac, name := p.currentDevice()
-	var dev *statusDevice
-	if mac != "" {
-		dev = &statusDevice{MAC: mac, Name: name}
-	}
-	writeStatus(appStatus{
+	st := appStatus{
 		Connected: connected,
 		Phase:     phase,
 		Logging:   logging,
 		BPM:       bpm,
-		Device:    dev,
+		Device:    p.statusDevice(),
 		ITGmania:  p.state.itg.target(),
-	})
+	}
+
+	// The second strap is reported only when it is in use, so a single-strap
+	// status.json keeps exactly the shape it has always had.
+	if p2 := a.players[slotP2]; p2.effectiveMAC() != "" {
+		connected, _, phase, bpm := p2.state.statusView()
+		st.Player2 = &playerStatus{
+			Connected: connected,
+			Phase:     phase,
+			BPM:       bpm,
+			Device:    p2.statusDevice(),
+			ITGmania:  p2.state.itg.target(),
+		}
+	}
+	writeStatus(st)
+}
+
+// statusDevice is this strap's device for status.json, nil when none is set.
+func (p *player) statusDevice() *statusDevice {
+	mac, name := p.currentDevice()
+	if mac == "" {
+		return nil
+	}
+	return &statusDevice{MAC: mac, Name: name}
 }
 
 // setPhase records a connection-phase transition and publishes it.
@@ -214,10 +320,13 @@ func (p *player) recordBPM(bpm int) {
 
 // currentDevice returns the configured device's MAC and (if known) its name.
 func (p *player) currentDevice() (mac, name string) {
+	mac = p.effectiveMAC()
+	if mac == "" {
+		return "", ""
+	}
 	a := p.app
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
-	mac = a.cfg.Current
 	for _, k := range a.cfg.Known {
 		if strings.EqualFold(k.MAC, mac) {
 			return mac, k.Name
@@ -303,7 +412,7 @@ func (p *player) currentMAC() string {
 	a := p.app
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
-	return a.cfg.Current
+	return a.cfg.currentFor(p.slot)
 }
 
 func (a *App) snapshotConfig() Config {
@@ -317,8 +426,10 @@ func (a *App) snapshotConfig() Config {
 func (p *player) switchTo(mac, name string) {
 	a := p.app
 	a.cfgMu.Lock()
-	a.cfg.Current = mac
-	a.cfg.upsert(mac, name)
+	a.cfg.setCurrentFor(p.slot, mac)
+	if mac != "" { // "" unassigns the slot; don't record it as a device
+		a.cfg.upsert(mac, name)
+	}
 	snap := a.cfg.clone()
 	a.cfgMu.Unlock()
 	if err := saveConfig(snap); err != nil {
@@ -349,8 +460,8 @@ func (p *player) handleBPM(bpm int) {
 
 	// Raw output stream (--print-bpm): every reading as received, independent of
 	// the logging toggle and junk filter.
-	if p.app.onReading != nil {
-		p.app.onReading(now, bpm)
+	if p.onReading != nil {
+		p.onReading(now, bpm)
 	}
 
 	// Publish live status (bpm) regardless of logging, so --status and external
@@ -464,7 +575,7 @@ func (p *player) runBLE() {
 		default:
 		}
 
-		mac := p.currentMAC()
+		mac := p.effectiveMAC()
 		if mac == "" {
 			// No device chosen yet — idle until one is picked from the tray.
 			p.setPhase(phaseIdle)

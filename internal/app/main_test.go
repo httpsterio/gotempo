@@ -127,13 +127,16 @@ func TestParseConfigRejectsDecimalGap(t *testing.T) {
 
 func TestParseConfigAcceptsValidValues(t *testing.T) {
 	// A complete, valid config (zero is a valid floor) round-trips unchanged.
-	data := `{"current":"AA","known":[],"auto_log":true,"session_gap_minutes":30,"min_bpm_threshold":0,"itgmania_module":""}`
+	data := `{"current":"AA","current_p2":"BB","two_player":true,"known":[],"auto_log":true,"session_gap_minutes":30,"min_bpm_threshold":0,"itgmania_module":""}`
 	cfg, changed := parseConfig([]byte(data))
 	if cfg == nil {
 		t.Fatal("parseConfig returned nil")
 	}
 	if changed {
 		t.Error("changed = true for an already-complete valid config")
+	}
+	if cfg.CurrentP2 != "BB" || !cfg.TwoPlayer {
+		t.Errorf("two-player keys lost: current_p2=%q two_player=%v", cfg.CurrentP2, cfg.TwoPlayer)
 	}
 	if cfg.SessionGapMinutes != 30 {
 		t.Errorf("gap = %d, want 30", cfg.SessionGapMinutes)

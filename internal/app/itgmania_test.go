@@ -26,7 +26,7 @@ func TestITGLineZeroPadsDate(t *testing.T) {
 }
 
 func TestITGHRPathFor(t *testing.T) {
-	got := itgHRPathFor(filepath.Join("/home/u/.itgmania/Themes/Simply Love/Modules", "gotempo.lua"))
+	got := itgHRPathFor(filepath.Join("/home/u/.itgmania/Themes/Simply Love/Modules", "gotempo.lua"), slotP1)
 	want := filepath.Join("/home/u/.itgmania/Themes/Simply Love/Modules", "hr.txt")
 	if got != want {
 		t.Errorf("itgHRPathFor = %q, want %q", got, want)
@@ -48,20 +48,20 @@ func writeModule(t *testing.T, dir string) string {
 func TestSetupITGRejectsMissingAndDir(t *testing.T) {
 	dir := t.TempDir()
 
-	if setupITG(filepath.Join(dir, "nope.lua")).enabled() {
+	if setupITG(filepath.Join(dir, "nope.lua"), slotP1).enabled() {
 		t.Error("overlay enabled for a missing module")
 	}
-	if setupITG(dir).enabled() {
+	if setupITG(dir, slotP1).enabled() {
 		t.Error("overlay enabled for a directory")
 	}
-	if setupITG("").enabled() {
+	if setupITG("", slotP1).enabled() {
 		t.Error("overlay enabled for an empty path")
 	}
 }
 
 func TestWriteAndClearITG(t *testing.T) {
 	dir := t.TempDir()
-	w := setupITG(writeModule(t, dir))
+	w := setupITG(writeModule(t, dir), slotP1)
 	if !w.enabled() {
 		t.Fatal("overlay not enabled for an existing module")
 	}
@@ -106,8 +106,8 @@ func TestWriteAndClearITG(t *testing.T) {
 // player disconnecting must not blank the other player's panel.
 func TestITGWritersAreIndependent(t *testing.T) {
 	dirA, dirB := t.TempDir(), t.TempDir()
-	a := setupITG(writeModule(t, dirA))
-	b := setupITG(writeModule(t, dirB))
+	a := setupITG(writeModule(t, dirA), slotP1)
+	b := setupITG(writeModule(t, dirB), slotP1)
 
 	now := time.Date(2026, 9, 4, 14, 32, 7, 0, time.Local)
 	a.write(154, now)
@@ -142,7 +142,7 @@ func TestITGWritersAreIndependent(t *testing.T) {
 func TestWriteITGDisabledIsNoop(t *testing.T) {
 	dir := t.TempDir()
 
-	for name, w := range map[string]*itgWriter{"empty": setupITG(""), "nil": nil} {
+	for name, w := range map[string]*itgWriter{"empty": setupITG("", slotP1), "nil": nil} {
 		t.Run(name, func(t *testing.T) {
 			if w.enabled() {
 				t.Error("overlay reports enabled")
@@ -168,7 +168,7 @@ func TestWriteITGDisabledIsNoop(t *testing.T) {
 // make the in-game panel disappear when the user stops session logging.
 func TestClearOutputLeavesITGFile(t *testing.T) {
 	dir := t.TempDir()
-	w := setupITG(writeModule(t, dir))
+	w := setupITG(writeModule(t, dir), slotP1)
 	w.write(154, time.Date(2026, 9, 4, 14, 32, 7, 0, time.Local))
 
 	s := newAppState(filepath.Join(dir, "gotempo-bpm.txt"), false)

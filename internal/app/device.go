@@ -133,7 +133,7 @@ func (a *App) applySetupDevice(opts cliOptions) (exit int, changed, proceed bool
 			fmt.Fprintf(os.Stderr, "invalid device MAC: %q\n", opts.device)
 			return 1, false, false
 		}
-		a.setCurrentDevice(mac, "")
+		a.setCurrentDevice(opts.slot(), mac, "")
 		return 0, true, true
 
 	case opts.selectDev:
@@ -146,7 +146,7 @@ func (a *App) applySetupDevice(opts cliOptions) (exit int, changed, proceed bool
 			fmt.Fprintln(os.Stderr, "no device selected")
 			return 1, false, false
 		}
-		a.setCurrentDevice(mac, name)
+		a.setCurrentDevice(opts.slot(), mac, name)
 		return 0, true, true
 	}
 	return 0, false, true
@@ -181,11 +181,28 @@ func (a *App) applySetupITGModule(opts cliOptions) (exit int, changed, proceed b
 	return 0, true, true
 }
 
-// setCurrentDevice adds the device (if absent) and marks it current. A blank
+// setCurrentDevice adds the device (if absent) and assigns it to a slot. A blank
 // name is left to backfill on first connect.
-func (a *App) setCurrentDevice(mac, name string) {
+func (a *App) setCurrentDevice(slot int, mac, name string) {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	a.cfg.upsert(mac, name)
-	a.cfg.Current = mac
+	a.cfg.setCurrentFor(slot, mac)
+}
+
+// applySetupTwoPlayer handles --two-player / --no-two-player: it records the
+// mode in the in-memory config (the caller persists it) and lets the run
+// proceed. Set-then-run like the device flags rather than set-then-exit like
+// --autostart, so one invocation can enable the mode and assign the strap.
+func (a *App) applySetupTwoPlayer(opts cliOptions) (changed bool) {
+	if !opts.twoPlayer && !opts.noTwoPlayer {
+		return false
+	}
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	if a.cfg.TwoPlayer == opts.twoPlayer {
+		return false
+	}
+	a.cfg.TwoPlayer = opts.twoPlayer
+	return true
 }

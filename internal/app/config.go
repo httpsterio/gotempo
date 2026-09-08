@@ -52,8 +52,33 @@ func configPath() string {
 	}
 	return filepath.Join(configDir(), "config.json")
 }
-func logsDir() string    { return dataDir() }
-func outputPath() string { return filepath.Join(logsDir(), "gotempo-bpm.txt") }
+func logsDir() string { return dataDir() }
+
+// Slots are the straps gotempo follows at once. ITGmania is a two-player game,
+// so two is the cap rather than an arbitrary limit.
+const (
+	slotP1 = 0
+	slotP2 = 1
+)
+
+// slotSuffix distinguishes the second strap's machine-read files. The first
+// keeps the original names, so an OBS source or an installed Lua module pointed
+// at gotempo-bpm.txt or hr.txt keeps working untouched when two-player mode is
+// switched on.
+//
+// This is deliberately not how session CSVs are named: those are read by a
+// human, so they carry -p1/-p2 and only while two straps are recording. See
+// player.sessionSuffix.
+func slotSuffix(slot int) string {
+	if slot == slotP2 {
+		return "-p2"
+	}
+	return ""
+}
+
+func outputPath(slot int) string {
+	return filepath.Join(logsDir(), "gotempo-bpm"+slotSuffix(slot)+".txt")
+}
 
 // statusPath is the cross-process status file the running instance maintains
 // (independent of logging) for `--status` to read. Beside gotempo-bpm.txt.
@@ -66,7 +91,15 @@ type KnownDevice struct {
 }
 
 type Config struct {
-	Current string        `json:"current"`
+	Current string `json:"current"`
+
+	// CurrentP2 is the second strap, followed only while TwoPlayer is set. The
+	// two are separate keys so turning the mode off does not lose the
+	// assignment, and so a cabinet operator's setup survives being switched
+	// back and forth.
+	CurrentP2 string `json:"current_p2"`
+	TwoPlayer bool   `json:"two_player"`
+
 	Known   []KnownDevice `json:"known"`
 	AutoLog bool          `json:"auto_log"` // start logging automatically on launch
 
@@ -94,6 +127,8 @@ const (
 func defaultConfig() *Config {
 	return &Config{
 		Current:           "",
+		CurrentP2:         "",
+		TwoPlayer:         false,
 		Known:             []KnownDevice{},
 		AutoLog:           false,
 		SessionGapMinutes: defaultSessionGapMinutes,
@@ -124,6 +159,8 @@ func (c Config) minBPM() int {
 func (c Config) clone() Config {
 	out := Config{
 		Current:           c.Current,
+		CurrentP2:         c.CurrentP2,
+		TwoPlayer:         c.TwoPlayer,
 		AutoLog:           c.AutoLog,
 		SessionGapMinutes: c.SessionGapMinutes,
 		MinBPMThreshold:   c.MinBPMThreshold,
@@ -131,6 +168,30 @@ func (c Config) clone() Config {
 	}
 	out.Known = append([]KnownDevice(nil), c.Known...)
 	return out
+}
+
+// currentFor returns the strap configured for a slot. P2 reads as unconfigured
+// while two-player mode is off, which is what makes its connection loop idle
+// rather than needing to be started and stopped.
+func (c Config) currentFor(slot int) string {
+	if slot == slotP2 {
+		if !c.TwoPlayer {
+			return ""
+		}
+		return c.CurrentP2
+	}
+	return c.Current
+}
+
+// setCurrentFor assigns a slot's strap. It does not enable two-player mode:
+// assigning P2 and turning the mode on are separate acts, so an operator can
+// stage the setup and flip it live in one click.
+func (c *Config) setCurrentFor(slot int, mac string) {
+	if slot == slotP2 {
+		c.CurrentP2 = mac
+		return
+	}
+	c.Current = mac
 }
 
 // upsert adds the device if absent, or updates its name if a non-empty one is
@@ -191,6 +252,28 @@ func parseConfig(data []byte) (*Config, bool) {
 		var s string
 		if json.Unmarshal(v, &s) == nil {
 			cfg.Current = s
+		} else {
+			changed = true
+		}
+	} else {
+		changed = true
+	}
+
+	if v, ok := raw["current_p2"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			cfg.CurrentP2 = s
+		} else {
+			changed = true
+		}
+	} else {
+		changed = true
+	}
+
+	if v, ok := raw["two_player"]; ok {
+		var b bool
+		if json.Unmarshal(v, &b) == nil {
+			cfg.TwoPlayer = b
 		} else {
 			changed = true
 		}

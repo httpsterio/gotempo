@@ -30,6 +30,22 @@ type cliOptions struct {
 	logLevel    string
 	config      string
 	itgModule   string
+
+	// player is which strap --device / --select-device apply to, 1 or 2. A
+	// modifier rather than a parallel --device-p2 flag, so it composes with the
+	// interactive picker and does not double every future per-slot option.
+	player      int
+	twoPlayer   bool
+	noTwoPlayer bool
+}
+
+// slot maps --player onto the internal slot index. parseFlags has already
+// rejected anything but 1 or 2.
+func (o cliOptions) slot() int {
+	if o.player == 2 {
+		return slotP2
+	}
+	return slotP1
 }
 
 // headless reports whether the long-running app should skip the tray. Printing
@@ -100,6 +116,9 @@ func parseFlags(args []string) (cliOptions, error) {
 	fs.StringVar(&o.logLevel, "log-level", "", "stderr verbosity: error|info|debug (default info)")
 	fs.StringVar(&o.config, "config", "", "path to config.json (must already exist)")
 	fs.StringVar(&o.itgModule, "itgmania-module", "", "set the path to gotempo.lua in config (hr.txt is written beside it), then run")
+	fs.IntVar(&o.player, "player", 1, "which strap --device/--select-device apply to: 1 or 2")
+	fs.BoolVar(&o.twoPlayer, "two-player", false, "follow two straps at once, then run")
+	fs.BoolVar(&o.noTwoPlayer, "no-two-player", false, "follow only the first strap, then run")
 	fs.Usage = func() {
 		out := fs.Output()
 		// Hand-rolled, grouped help: flag.PrintDefaults sorts alphabetically,
@@ -120,6 +139,9 @@ func parseFlags(args []string) (cliOptions, error) {
 		line("--no-autostart", "disable launch-on-login, then exit")
 		line("--device <mac>", "set the current device by MAC, then run")
 		line("--select-device", "interactively pick the current device, then run")
+		line("  --player <1|2>", "which strap the two flags above apply to (default 1)")
+		line("--two-player", "follow two straps at once, then run")
+		line("--no-two-player", "follow only the first strap, then run")
 		line("--itgmania-module", "set the path to gotempo.lua (<path>), then run")
 		fmt.Fprintln(out, "\nOptions:")
 		line("--auto-log", "force session logging on for this run")
@@ -288,8 +310,9 @@ func printStatus(running bool, st appStatus, asJSON bool) {
 			BPM       *int          `json:"bpm"`
 			Device    *statusDevice `json:"device"`
 			ITGmania  string        `json:"itgmania,omitempty"`
+			Player2   *playerStatus `json:"player2,omitempty"`
 			Timestamp string        `json:"timestamp"`
-		}{running, st.Connected, st.Phase, st.Logging, st.BPM, st.Device, st.ITGmania, time.Now().Format(time.RFC3339)})
+		}{running, st.Connected, st.Phase, st.Logging, st.BPM, st.Device, st.ITGmania, st.Player2, time.Now().Format(time.RFC3339)})
 		fmt.Println(string(b))
 		return
 	}
@@ -298,35 +321,54 @@ func printStatus(running bool, st appStatus, asJSON bool) {
 		return
 	}
 
-	dev := "no device"
-	if st.Device != nil {
-		if st.Device.Name != "" {
-			dev = st.Device.Name
-		} else {
-			dev = st.Device.MAC
-		}
-	}
 	logging := "logging off"
 	if st.Logging {
 		logging = "logging on"
 	}
 
-	switch st.Phase {
-	case phaseConnected:
-		if st.BPM != nil {
-			fmt.Printf("connected, %d bpm, %s, %s\n", *st.BPM, dev, logging)
-		} else {
-			fmt.Printf("connected, no reading yet, %s, %s\n", dev, logging)
-		}
-	case phaseConnecting:
-		fmt.Printf("connecting, %s, %s\n", dev, logging)
-	case phaseReconnecting:
-		fmt.Printf("reconnecting, %s, %s\n", dev, logging)
-	default: // idle / unknown
-		fmt.Printf("idle, %s\n", dev)
+	// One strap prints one unprefixed line, exactly as it always has. A second
+	// strap prefixes both lines, so a two-player line is never mistaken for the
+	// single-strap output a script may be parsing.
+	prefix := ""
+	if st.Player2 != nil {
+		prefix = "P1: "
 	}
+	fmt.Print(prefix + statusLine(st.Phase, st.BPM, st.Device, logging))
 	if st.ITGmania != "" {
-		fmt.Printf("itgmania: %s\n", st.ITGmania)
+		fmt.Printf("%sitgmania: %s\n", prefix, st.ITGmania)
+	}
+
+	if p2 := st.Player2; p2 != nil {
+		fmt.Print("P2: " + statusLine(p2.Phase, p2.BPM, p2.Device, logging))
+		if p2.ITGmania != "" {
+			fmt.Printf("P2: itgmania: %s\n", p2.ITGmania)
+		}
+	}
+}
+
+// statusLine renders one strap's human-readable state, newline included.
+func statusLine(phase string, bpm *int, device *statusDevice, logging string) string {
+	dev := "no device"
+	if device != nil {
+		if device.Name != "" {
+			dev = device.Name
+		} else {
+			dev = device.MAC
+		}
+	}
+
+	switch phase {
+	case phaseConnected:
+		if bpm != nil {
+			return fmt.Sprintf("connected, %d bpm, %s, %s\n", *bpm, dev, logging)
+		}
+		return fmt.Sprintf("connected, no reading yet, %s, %s\n", dev, logging)
+	case phaseConnecting:
+		return fmt.Sprintf("connecting, %s, %s\n", dev, logging)
+	case phaseReconnecting:
+		return fmt.Sprintf("reconnecting, %s, %s\n", dev, logging)
+	default: // idle / unknown
+		return fmt.Sprintf("idle, %s\n", dev)
 	}
 }
 

@@ -63,6 +63,16 @@ func Run() {
 		os.Exit(1)
 	}
 
+	if opts.twoPlayer && opts.noTwoPlayer {
+		fmt.Fprintln(os.Stderr, "--two-player and --no-two-player are mutually exclusive")
+		os.Exit(1)
+	}
+
+	if opts.player != 1 && opts.player != 2 {
+		fmt.Fprintf(os.Stderr, "invalid --player %d (want 1 or 2)\n", opts.player)
+		os.Exit(1)
+	}
+
 	if opts.config != "" {
 		// An explicit path must exist: the user pointed somewhere specific, so
 		// silently falling back to defaults would hide a typo.
@@ -90,6 +100,14 @@ func Run() {
 	os.Exit(cmdRun(opts))
 }
 
+// orNone renders an unassigned slot for the startup log.
+func orNone(mac string) string {
+	if mac == "" {
+		return "(none)"
+	}
+	return mac
+}
+
 // cmdRun is the long-running path: tray by default, headless with
 // --no-tray/--print-bpm. It takes the single-instance lock so a second launch
 // can't add another tray icon or fight over the BLE connection.
@@ -112,6 +130,10 @@ func cmdRun(opts cliOptions) int {
 
 	cfg, changed := loadConfig()
 	app := newApp(cfg)
+
+	// --two-player applies before the device flags so that --player 2 in the same
+	// invocation lands on a slot that is already live.
+	changed = app.applySetupTwoPlayer(opts) || changed
 
 	// Setup flags --device / --select-device set the current device, then the run
 	// continues. A failure (bad MAC, no terminal, cancelled) stops here.
@@ -137,17 +159,24 @@ func cmdRun(opts cliOptions) int {
 			logErrln("could not write config:", err)
 		}
 	}
-	if cfg.Current == "" {
+	switch snap := app.snapshotConfig(); {
+	case !app.anyDeviceConfigured():
 		logInfoln("no device configured — pick one from the tray ‘Devices’ menu")
-	} else {
-		logInfof("using device: %s", cfg.Current)
+	case snap.TwoPlayer:
+		logInfof("two-player mode: P1 %s, P2 %s",
+			orNone(snap.Current), orNone(snap.CurrentP2))
+	default:
+		logInfof("using device: %s", snap.Current)
+		if snap.CurrentP2 != "" {
+			logInfof("a second device is assigned (%s) but two-player mode is off", snap.CurrentP2)
+		}
 	}
 
 	// Resolve the ITGmania target once, here: the module gets reinstalled and
 	// games get moved, so a path that validated when it was set is re-checked
 	// every launch rather than trusted. A miss disables the overlay for the run
 	// and logs why.
-	app.p1().state.attachITG(setupITG(app.snapshotConfig().ITGmaniaModule))
+	app.attachITG(app.snapshotConfig().ITGmaniaModule)
 
 	// Apply the session-only logging override (config value, with headless
 	// defaulting on and --auto-log/--no-auto-log winning). Not persisted.
@@ -160,7 +189,10 @@ func cmdRun(opts cliOptions) int {
 	// --status racing startup can't read a previous run's leftover status.json
 	// (the lock is already held, so the instance counts as live). runBLE advances
 	// the phase from here.
-	app.p1().setPhase(phaseIdle)
+	for _, p := range app.players {
+		p.state.setPhase(phaseIdle)
+	}
+	app.publishStatus()
 
 	// Probe for an adapter, but don't fail if Bluetooth is currently off — the
 	// worker keeps retrying once it comes back.
@@ -179,13 +211,15 @@ func cmdRun(opts cliOptions) int {
 // --print-bpm it streams every reading to stdout. Headless has no device
 // picker, so a missing device is a hard error (exit 3) rather than an idle wait.
 func (a *App) runHeadless(opts cliOptions) int {
-	if a.p1().currentMAC() == "" {
+	if !a.anyDeviceConfigured() {
 		logErrln("no device configured; set one in config.json (headless mode has no picker)")
 		return 3
 	}
 
+	// --print-bpm streams one strap, chosen by --player, so the output stays a
+	// single unambiguous series when two are connected.
 	if opts.printBPM {
-		a.onReading = func(t time.Time, bpm int) { printReading(t, bpm, opts) }
+		a.players[opts.slot()].onReading = func(t time.Time, bpm int) { printReading(t, bpm, opts) }
 	}
 
 	a.startWorkers()

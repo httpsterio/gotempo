@@ -37,7 +37,11 @@ import (
 // the 0 a strap reports when it isn't on skin is passed through unfiltered
 // rather than suppressed: it is the fast hide.
 
-const itgHRFile = "hr.txt"
+// itgHRBase is the module-facing filename. P1 writes exactly "hr.txt" so an
+// already-installed module keeps working with no change; the second strap gets
+// "hr-p2.txt". There is deliberately no hr-p1.txt, so the updated module reads
+// the two names directly and needs no fallback logic in Lua.
+const itgHRBase = "hr"
 
 // itgWriter owns one hr.txt. There is one per connected strap rather than one
 // per process: a two-player cabinet writes a separate file per side, and the
@@ -66,8 +70,8 @@ type itgWriter struct {
 // pointed at is the one inside the active theme. A gotempo.lua in some other
 // theme's Modules/ folder is a real, existing file that the running game never
 // reads, and nothing here can detect that.
-func itgHRPathFor(module string) string {
-	return filepath.Join(filepath.Dir(module), itgHRFile)
+func itgHRPathFor(module string, slot int) string {
+	return filepath.Join(filepath.Dir(module), itgHRBase+slotSuffix(slot)+".txt")
 }
 
 // setupITG validates the configured module path once, at startup, and returns
@@ -79,7 +83,7 @@ func itgHRPathFor(module string) string {
 // so a wrong path keeps failing loudly instead of building a phantom tree.
 //
 // It always returns a usable writer; a disabled one simply has no path.
-func setupITG(module string) *itgWriter {
+func setupITG(module string, slot int) *itgWriter {
 	w := &itgWriter{}
 	if module == "" {
 		return w
@@ -93,9 +97,19 @@ func setupITG(module string) *itgWriter {
 		logErrf("[ITG] itgmania_module is a directory, want the gotempo.lua file: %s", module)
 		return w
 	}
-	w.path = itgHRPathFor(module)
-	logInfof("[ITG] writing %s", w.path)
+	w.path = itgHRPathFor(module, slot)
 	return w
+}
+
+// sibling returns a writer for another slot's file beside the same module,
+// carrying this one's enabled/disabled verdict rather than re-deriving it. The
+// module path is checked once per run, so a wrong one is reported once instead
+// of once per strap.
+func (w *itgWriter) sibling(module string, slot int) *itgWriter {
+	if !w.enabled() {
+		return &itgWriter{}
+	}
+	return &itgWriter{path: itgHRPathFor(module, slot)}
 }
 
 // enabled reports whether the overlay resolved to a usable path.

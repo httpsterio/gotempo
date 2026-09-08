@@ -1,7 +1,9 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,17 +31,40 @@ func TestParseFlags(t *testing.T) {
 		{"itgmania-module", []string{"--itgmania-module", "/x/gotempo.lua"}, cliOptions{itgModule: "/x/gotempo.lua"}},
 		{"auto-log", []string{"--auto-log"}, cliOptions{autoLog: true}},
 		{"no-auto-log", []string{"--no-auto-log"}, cliOptions{noAutoLog: true}},
+		{"player 2", []string{"--player", "2"}, cliOptions{player: 2}},
+		{"two-player", []string{"--two-player"}, cliOptions{twoPlayer: true}},
+		{"no-two-player", []string{"--no-two-player"}, cliOptions{noTwoPlayer: true}},
+		{"device on p2", []string{"--player", "2", "--device", "24:AC:AC:18:41:CC"},
+			cliOptions{player: 2, device: "24:AC:AC:18:41:CC"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			want := c.want
+			if want.player == 0 {
+				// --player defaults to 1, so cases state it only when they test it.
+				want.player = 1
+			}
 			got, err := parseFlags(c.args)
 			if err != nil {
 				t.Fatalf("parseFlags(%v) error: %v", c.args, err)
 			}
-			if got != c.want {
-				t.Errorf("parseFlags(%v) = %+v, want %+v", c.args, got, c.want)
+			if got != want {
+				t.Errorf("parseFlags(%v) = %+v, want %+v", c.args, got, want)
 			}
 		})
+	}
+}
+
+// --player maps onto the internal slot index, and anything but 2 is P1 (run.go
+// rejects out-of-range values before this is reached).
+func TestOptionsSlot(t *testing.T) {
+	for _, c := range []struct {
+		player int
+		want   int
+	}{{1, slotP1}, {2, slotP2}} {
+		if got := (cliOptions{player: c.player}).slot(); got != c.want {
+			t.Errorf("--player %d -> slot %d, want %d", c.player, got, c.want)
+		}
 	}
 }
 
@@ -145,5 +170,59 @@ func TestStatusRoundTrip(t *testing.T) {
 	}
 	if _, ok := readStatus(); ok {
 		t.Error("unparseable status file should not be ok")
+	}
+}
+
+// A single-strap status.json must stay exactly the shape it has always been, so
+// existing --status consumers keep working. The optional key is the whole
+// reason the second strap is not an array.
+func TestStatusOmitsPlayer2WhenSingle(t *testing.T) {
+	bpm := 154
+	data, err := json.Marshal(appStatus{
+		Connected: true, Phase: phaseConnected, Logging: true, BPM: &bpm,
+		Device: &statusDevice{MAC: "AA", Name: "Strap"}, Updated: "t",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "player2") {
+		t.Errorf("single-strap status carries a player2 key: %s", data)
+	}
+
+	want := `{"connected":true,"phase":"connected","logging":true,"bpm":154,` +
+		`"device":{"mac":"AA","name":"Strap"},"updated":"t"}`
+	if string(data) != want {
+		t.Errorf("status shape changed:\n got %s\nwant %s", data, want)
+	}
+}
+
+func TestStatusIncludesPlayer2WhenTwo(t *testing.T) {
+	data, err := json.Marshal(appStatus{
+		Phase:   phaseIdle,
+		Player2: &playerStatus{Phase: phaseConnecting, Device: &statusDevice{MAC: "BB"}},
+		Updated: "t",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back appStatus
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Player2 == nil || back.Player2.Device == nil || back.Player2.Device.MAC != "BB" {
+		t.Errorf("player2 did not round-trip: %s", data)
+	}
+}
+
+// One strap prints the unprefixed line it always has; two prefix both, so a
+// two-player line is never mistaken for single-strap output.
+func TestStatusLinePrefixing(t *testing.T) {
+	bpm := 154
+	got := statusLine(phaseConnected, &bpm, &statusDevice{Name: "Polar H10"}, "logging on")
+	if want := "connected, 154 bpm, Polar H10, logging on\n"; got != want {
+		t.Errorf("statusLine = %q, want %q", got, want)
+	}
+	if got := statusLine(phaseIdle, nil, nil, "logging off"); got != "idle, no device\n" {
+		t.Errorf("idle line = %q", got)
 	}
 }

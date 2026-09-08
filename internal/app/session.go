@@ -24,7 +24,12 @@ func sessionsDir() string { return filepath.Join(dataDir(), "sessions") }
 // and at session boundaries (endSession) for power-loss durability, not on every
 // row. All methods are safe for concurrent use.
 type SessionLogger struct {
-	dir          string
+	dir string
+	// suffix names this logger's files, and is resolved per file rather than
+	// once, because two-player mode can be switched on or off mid-run. All
+	// loggers share one directory, so it is also what keeps them from resuming
+	// each other's sessions; see mostRecentSession.
+	suffix       func() string
 	gapThreshold time.Duration
 	minBPM       int
 
@@ -34,8 +39,11 @@ type SessionLogger struct {
 	lastValid   time.Time
 }
 
-func newSessionLogger(dir string, gap time.Duration, minBPM int, enabled bool) *SessionLogger {
-	return &SessionLogger{dir: dir, gapThreshold: gap, minBPM: minBPM, enabled: enabled}
+func newSessionLogger(dir string, suffix func() string, gap time.Duration, minBPM int, enabled bool) *SessionLogger {
+	if suffix == nil {
+		suffix = func() string { return "" }
+	}
+	return &SessionLogger{dir: dir, suffix: suffix, gapThreshold: gap, minBPM: minBPM, enabled: enabled}
 }
 
 // setEnabled toggles logging. Turning it off closes the current session. The
@@ -113,6 +121,28 @@ func (s *SessionLogger) Close() {
 // honest timestamp. Still RFC3339, so time.Parse(time.RFC3339, ...) reads it.
 const csvTimeFormat = "2006-01-02T15:04:05.000Z07:00"
 
+// sessionTimeFormat names a session file. Colons are not usable in filenames on
+// Windows, hence the dashes.
+const sessionTimeFormat = "2006-01-02T15-04-05"
+
+// sessionName is "<timestamp><suffix>.csv"; sessionMatches is its inverse.
+func sessionName(t time.Time, suffix string) string {
+	return t.Format(sessionTimeFormat) + suffix + ".csv"
+}
+
+// sessionMatches reports whether a filename is a session file carrying exactly
+// this suffix. The comparison is anchored at the end of the fixed-width
+// timestamp rather than done with HasSuffix, because an empty suffix must match
+// only unsuffixed files: HasSuffix("...-p2.csv", ".csv") is true, which would
+// have a single-strap logger adopt a two-player file.
+func sessionMatches(name, suffix string) bool {
+	base, found := strings.CutSuffix(name, ".csv")
+	if !found || len(base) < len(sessionTimeFormat) {
+		return false
+	}
+	return base[len(sessionTimeFormat):] == suffix
+}
+
 func (s *SessionLogger) writeLine(t time.Time, bpm int) error {
 	// Unbuffered: the row reaches the kernel page cache here, so it is readable
 	// and survives an app crash without fsync. Durability against power loss is
@@ -128,7 +158,8 @@ func (s *SessionLogger) openSession(t time.Time) error {
 	if err := os.MkdirAll(s.dir, 0755); err != nil {
 		return err
 	}
-	if last, path, ok := mostRecentSession(s.dir); ok && t.Sub(last) <= s.gapThreshold {
+	suffix := s.suffix()
+	if last, path, ok := mostRecentSession(s.dir, suffix); ok && t.Sub(last) <= s.gapThreshold {
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			return err
@@ -138,7 +169,7 @@ func (s *SessionLogger) openSession(t time.Time) error {
 		logInfof("[CSV] resuming session %s", filepath.Base(path))
 		return nil
 	}
-	name := t.Format("2006-01-02T15-04-05") + ".csv"
+	name := sessionName(t, suffix)
 	f, err := os.Create(filepath.Join(s.dir, name))
 	if err != nil {
 		return err
@@ -176,14 +207,19 @@ func (s *SessionLogger) endSession() {
 // but died before the first valid reading) never blocks resume: the loop falls
 // through to the next-newest file with data. The orphan is left on disk; a
 // retention pass can prune zero-data files later.
-func mostRecentSession(dir string) (last time.Time, path string, ok bool) {
+// It considers only files matching this logger's own suffix. Every strap logs
+// into the same directory, so without that filter P2's logger would resume P1's
+// file and interleave two people's readings into one CSV. One consequence to
+// accept: toggling two-player mode always starts a new file rather than
+// resuming, because the name it would resume into no longer matches.
+func mostRecentSession(dir, suffix string) (last time.Time, path string, ok bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return time.Time{}, "", false
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".csv") {
+		if !e.IsDir() && sessionMatches(e.Name(), suffix) {
 			names = append(names, e.Name())
 		}
 	}

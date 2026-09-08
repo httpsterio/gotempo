@@ -22,6 +22,10 @@ const (
 // the logging toggle (unlike gotempo-bpm.txt), so --status reflects the real app
 // state. BPM is nil when not connected, or connected with no reading yet. Device
 // is nil when none is configured.
+// The top-level connection fields are the first strap's. The second, when
+// two-player mode is on, arrives under "player2" instead of the whole document
+// becoming an array: a single-strap status.json then stays byte-identical to
+// what it always was, and every existing --status consumer keeps working.
 type appStatus struct {
 	Connected bool          `json:"connected"`
 	Phase     string        `json:"phase"`
@@ -29,7 +33,18 @@ type appStatus struct {
 	BPM       *int          `json:"bpm"`
 	Device    *statusDevice `json:"device"`
 	ITGmania  string        `json:"itgmania,omitempty"` // resolved hr.txt, empty when the overlay is off
+	Player2   *playerStatus `json:"player2,omitempty"`
 	Updated   string        `json:"updated"`
+}
+
+// playerStatus is the second strap's half of appStatus. Logging is absent: it is
+// one process-wide toggle, so it stays a top-level field.
+type playerStatus struct {
+	Connected bool          `json:"connected"`
+	Phase     string        `json:"phase"`
+	BPM       *int          `json:"bpm"`
+	Device    *statusDevice `json:"device"`
+	ITGmania  string        `json:"itgmania,omitempty"`
 }
 
 type statusDevice struct {

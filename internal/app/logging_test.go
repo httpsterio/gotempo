@@ -19,12 +19,12 @@ func TestSetLoggingClearsOutput(t *testing.T) {
 	a := newApp(cfg)
 
 	a.p1().handleBPM(72) // logging on: writes the current bpm to gotempo-bpm.txt
-	if b, _ := os.ReadFile(outputPath()); string(b) != "72" {
+	if b, _ := os.ReadFile(outputPath(slotP1)); string(b) != "72" {
 		t.Fatalf("bpm file = %q, want 72", b)
 	}
 
 	a.setLogging(false) // stop: overlay must go blank
-	if b, _ := os.ReadFile(outputPath()); len(b) != 0 {
+	if b, _ := os.ReadFile(outputPath(slotP1)); len(b) != 0 {
 		t.Errorf("bpm file after stop = %q, want empty", b)
 	}
 }
