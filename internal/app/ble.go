@@ -125,12 +125,87 @@ type player struct {
 	// read-only.
 	onReading func(time.Time, int)
 
-	// overrideMu guards override, the transient strap assignment. It is set by
-	// something outside the operator's config (the ITGmania module, once that
-	// lands) and is never persisted, so quitting returns to config.json. Empty
-	// means "no override", and the config value is used.
-	overrideMu sync.Mutex
-	override   string
+	// assignMu guards the transient assignment, set by something outside the
+	// operator's config (the ITGmania module, once that lands) and never
+	// persisted, so quitting returns to config.json.
+	//
+	// override is the strap this side should follow; empty means use config.
+	// claimed is the strap the person on this side says is theirs, read from
+	// their game profile; empty means they claimed nothing. They are separate
+	// because the second one gates output rather than selecting a device: see
+	// publishes.
+	assignMu sync.Mutex
+	override string
+	claimed  string
+
+	// connMu guards connMAC, the strap actually delivering readings right now.
+	// Distinct from effectiveMAC, which is what this side is *trying* to follow:
+	// during a switch the outgoing connection can still deliver a reading or two
+	// before its cleanup lands, and attributing those to the incoming player is
+	// exactly the mistake the gate exists to prevent.
+	connMu  sync.Mutex
+	connMAC string
+}
+
+// setConnMAC records the strap now delivering readings, or "" once it is gone.
+func (p *player) setConnMAC(mac string) {
+	p.connMu.Lock()
+	p.connMAC = mac
+	p.connMu.Unlock()
+}
+
+func (p *player) connectedMAC() string {
+	p.connMu.Lock()
+	defer p.connMu.Unlock()
+	return p.connMAC
+}
+
+// setClaim records the strap the person on this side says is theirs, read from
+// their game profile. Passing "" means they claimed nothing, which opens the
+// gate to whatever is configured.
+//
+// A change can shut the gate, so the panel is blanked at once rather than
+// leaving the previous player's reading up for the module's 60s staleness
+// window, and the CSV session is broken so the next reading starts a new file
+// instead of appending a different person to the last one.
+func (p *player) setClaim(mac string) {
+	p.assignMu.Lock()
+	changed := !strings.EqualFold(p.claimed, mac)
+	p.claimed = mac
+	p.assignMu.Unlock()
+	if !changed {
+		return
+	}
+
+	p.state.itg.clear()
+	p.session.breakSession()
+	logInfof("[ITG] P%d claims %s (%s)", p.slot+1, orNone(mac), gateState(p.publishes()))
+	p.app.signalUI()
+}
+
+// publishes reports whether this strap's readings may be attributed to the
+// person on this side. It is the guard against showing one person's heart rate
+// as another's, which is otherwise silent and looks like it is working.
+//
+// A player who claimed no strap gets whatever is configured, which is what lets
+// a cabinet keep a house belt for casual players while regulars carry their own.
+// A player who claimed one gets it or nothing: falling back to the house belt
+// would draw whoever is wearing that, plausibly someone on the next machine.
+func (p *player) publishes() bool {
+	p.assignMu.Lock()
+	claim := p.claimed
+	p.assignMu.Unlock()
+	if claim == "" {
+		return true
+	}
+	return strings.EqualFold(claim, p.connectedMAC())
+}
+
+func gateState(open bool) string {
+	if open {
+		return "publishing"
+	}
+	return "not publishing"
 }
 
 func newApp(cfg *Config) *App {
@@ -172,10 +247,10 @@ func (p *player) sessionSuffix() string {
 // connection loop so it picks the change up. Passing "" restores the configured
 // strap.
 func (p *player) setOverride(mac string) {
-	p.overrideMu.Lock()
+	p.assignMu.Lock()
 	changed := p.override != mac
 	p.override = mac
-	p.overrideMu.Unlock()
+	p.assignMu.Unlock()
 	if !changed {
 		return
 	}
@@ -189,9 +264,9 @@ func (p *player) setOverride(mac string) {
 // override when one is set, otherwise the operator's config. Empty means idle,
 // which is how P2 sits quiet while two-player mode is off.
 func (p *player) effectiveMAC() string {
-	p.overrideMu.Lock()
+	p.assignMu.Lock()
 	override := p.override
-	p.overrideMu.Unlock()
+	p.assignMu.Unlock()
 	if override != "" {
 		return override
 	}
@@ -560,8 +635,16 @@ func (p *player) handleBPM(bpm int) {
 	// pollers see the real reading even when logging is off.
 	p.recordBPM(bpm)
 
-	// ITGmania overlay: every reading, undeduped and ungated, because the
-	// timestamp in the line is what tells the module the strap is still live.
+	// Everything below publishes this reading *as this side's player's*, so it
+	// stops here when the connected strap is not the one they claimed. --print-bpm
+	// and status.json above are exempt: both name their strap explicitly and are
+	// diagnostic rather than attributed.
+	if !p.publishes() {
+		return
+	}
+
+	// ITGmania overlay: every reading, undeduped and ungated by logging, because
+	// the timestamp in the line is what tells the module the strap is still live.
 	// See itgmania.go.
 	p.state.itg.write(bpm, now)
 
@@ -917,6 +1000,7 @@ func (p *player) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Ad
 
 	logInfoln("[BLE] connected")
 	connectedAt := time.Now()
+	p.setConnMAC(addr.MAC.String())
 	p.state.onConnect()
 	p.setPhase(phaseConnected)
 	p.app.markConnected(addr.MAC.String())
@@ -926,6 +1010,7 @@ func (p *player) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Ad
 	p.app.signalUI()
 
 	cleanup := func() {
+		p.setConnMAC("")
 		_ = chars[0].EnableNotifications(nil)
 		_ = device.Disconnect()
 	}

@@ -37,6 +37,8 @@ type SessionLogger struct {
 	enabled     bool
 	currentFile *os.File
 	lastValid   time.Time
+	// noResume forces the next session into a new file, set by breakSession.
+	noResume bool
 }
 
 func newSessionLogger(dir string, suffix func() string, gap time.Duration, minBPM int, enabled bool) *SessionLogger {
@@ -105,6 +107,21 @@ func (s *SessionLogger) Flush() {
 	}
 }
 
+// breakSession ends the open session and stops the next one resuming it, so the
+// next reading always lands in a fresh file.
+//
+// Used when the person on this side changes. The resume rule is a time gap,
+// which is the right question for "is this the same workout" but the wrong one
+// for "is this the same person": two players swapping within the gap would
+// otherwise have their readings appended into one CSV with nothing marking the
+// handover.
+func (s *SessionLogger) breakSession() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.endSession()
+	s.noResume = true
+}
+
 // Close ends the current session, releasing the file handle. The file is
 // already complete; this just frees the handle when the app quits. A later
 // reading reopens via the gap rule.
@@ -159,7 +176,9 @@ func (s *SessionLogger) openSession(t time.Time) error {
 		return err
 	}
 	suffix := s.suffix()
-	if last, path, ok := mostRecentSession(s.dir, suffix); ok && t.Sub(last) <= s.gapThreshold {
+	resume := !s.noResume
+	s.noResume = false
+	if last, path, ok := mostRecentSession(s.dir, suffix); resume && ok && t.Sub(last) <= s.gapThreshold {
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			return err

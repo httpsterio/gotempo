@@ -334,3 +334,55 @@ func sessionFileNames(t *testing.T, dir string) []string {
 	}
 	return out
 }
+
+// The resume rule is a time gap, which answers "is this the same workout" but
+// not "is this the same person". Two players swapping inside the gap would
+// otherwise have their readings appended into one CSV with nothing marking the
+// handover, so a claim change breaks the session.
+func TestBreakSessionForcesANewFile(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
+
+	s := newSessionLogger(dir, nil, time.Hour, 20, true)
+	if err := s.LogReading(base, 150); err != nil {
+		t.Fatal(err)
+	}
+
+	s.breakSession()
+
+	// One minute later, well inside the gap, so this would resume without the break.
+	if err := s.LogReading(base.Add(time.Minute), 88); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	if names := sessionFileNames(t, dir); len(names) != 2 {
+		t.Errorf("got %d session files (%v), want a fresh one after the handover", len(names), names)
+	}
+}
+
+// The break is one-shot: an ordinary gap-based resume must still work
+// afterwards, or every session after a handover would be a new file.
+func TestBreakSessionIsOneShot(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 6, 8, 14, 0, 0, 0, time.UTC)
+
+	s := newSessionLogger(dir, nil, time.Hour, 20, true)
+	if err := s.LogReading(base, 150); err != nil {
+		t.Fatal(err)
+	}
+	s.breakSession()
+	if err := s.LogReading(base.Add(time.Minute), 88); err != nil {
+		t.Fatal(err)
+	}
+	s.Close() // closes the handle; the next reading resumes by the gap rule
+
+	if err := s.LogReading(base.Add(2*time.Minute), 89); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	if names := sessionFileNames(t, dir); len(names) != 2 {
+		t.Errorf("got %d session files (%v), want the break to apply once only", len(names), names)
+	}
+}

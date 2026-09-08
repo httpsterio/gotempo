@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // twoPlayerApp builds an App in two-player mode with both straps assigned and
@@ -347,5 +348,133 @@ func TestAnyConnected(t *testing.T) {
 	p1.state.setConnected(true)
 	if !a.anyConnected() {
 		t.Error("P1 connected, but anyConnected() is false")
+	}
+}
+
+// The output gate. This is the guard against drawing one person's heart rate as
+// another's, which is silent and looks like it is working, so the table is
+// spelled out in full.
+func TestPublishesGate(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		claimed   string
+		connected string
+		want      bool
+	}{
+		{"no claim, house belt connected", "", "YY", true},
+		{"no claim, nothing connected", "", "", true},
+		{"claim met", "XX", "XX", true},
+		{"claim met, different case", "xx", "XX", true},
+
+		// The one that matters: the player's own belt is unreachable and gotempo
+		// is sitting on the cabinet's configured belt, which someone else is
+		// wearing. Publishing here would draw a stranger's heart rate as theirs.
+		{"claimed X, connected to the house belt", "XX", "YY", false},
+		{"claimed X, connected to nothing", "XX", "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, p1, _ := twoPlayerApp(t)
+			p1.claimed = c.claimed
+			p1.setConnMAC(c.connected)
+			if got := p1.publishes(); got != c.want {
+				t.Errorf("publishes() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A shut gate must stop the overlay and the CSV, while leaving the diagnostic
+// paths alone: --status should still report what is really connected.
+func TestShutGateStopsPublishingButNotStatus(t *testing.T) {
+	dir := t.TempDir()
+	_, p1, _ := twoPlayerApp(t)
+	t.Setenv("XDG_DATA_HOME", dir)
+
+	hr := filepath.Join(dir, "hr.txt")
+	p1.state.attachITG(&itgWriter{path: hr})
+	p1.session = newSessionLogger(filepath.Join(dir, "sessions"), nil, time.Hour, 20, true)
+	p1.state.setLogging(true)
+
+	// Someone else's belt is connected while this player claims their own.
+	p1.claimed = "XX:XX:XX:XX:XX:XX"
+	p1.setConnMAC("YY:YY:YY:YY:YY:YY")
+
+	p1.handleBPM(154)
+
+	if _, err := os.Stat(hr); !os.IsNotExist(err) {
+		data, _ := os.ReadFile(hr)
+		t.Errorf("shut gate wrote the overlay: %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sessions")); !os.IsNotExist(err) {
+		t.Error("shut gate opened a CSV session")
+	}
+	if b, _ := os.ReadFile(p1.state.outPath); len(b) != 0 {
+		t.Errorf("shut gate wrote the OBS file: %q", b)
+	}
+
+	// status.json is diagnostic, not attributed, so it still carries the reading.
+	if _, _, _, bpm := p1.state.statusView(); bpm == nil || *bpm != 154 {
+		t.Errorf("status lost the reading: %v", bpm)
+	}
+	// Opening the gate lets the same reading through.
+	p1.setConnMAC("XX:XX:XX:XX:XX:XX")
+	p1.handleBPM(154)
+	if data, err := os.ReadFile(hr); err != nil || len(data) == 0 {
+		t.Errorf("open gate did not write the overlay: %q, %v", data, err)
+	}
+}
+
+// --print-bpm is exempt: it names its strap with --device/--player, so it is
+// never ambiguous about whose reading it is, and gating it would make a
+// debugging tool go silent exactly when something is wrong.
+func TestPrintBPMIsNotGated(t *testing.T) {
+	_, p1, _ := twoPlayerApp(t)
+	p1.claimed = "XX:XX:XX:XX:XX:XX"
+	p1.setConnMAC("YY:YY:YY:YY:YY:YY")
+
+	got := 0
+	p1.onReading = func(_ time.Time, bpm int) { got = bpm }
+	p1.handleBPM(154)
+
+	if got != 154 {
+		t.Errorf("--print-bpm callback got %d, want 154 even with the gate shut", got)
+	}
+}
+
+// Changing who is on this side must blank the panel at once, rather than
+// leaving the previous player's reading up for the module's 60s staleness window.
+func TestSetClaimClearsTheOverlay(t *testing.T) {
+	dir := t.TempDir()
+	_, p1, _ := twoPlayerApp(t)
+
+	hr := filepath.Join(dir, "hr.txt")
+	if err := os.WriteFile(hr, []byte("154 20260904 52327\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	p1.state.attachITG(&itgWriter{path: hr})
+
+	p1.setClaim("XX:XX:XX:XX:XX:XX")
+
+	if data, _ := os.ReadFile(hr); len(data) != 0 {
+		t.Errorf("a new claim left the previous player's reading up: %q", data)
+	}
+}
+
+// Re-setting the same claim is not a handover and must not disturb anything.
+func TestSetClaimIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	_, p1, _ := twoPlayerApp(t)
+
+	hr := filepath.Join(dir, "hr.txt")
+	p1.state.attachITG(&itgWriter{path: hr})
+	p1.setClaim("XX:XX:XX:XX:XX:XX")
+
+	if err := os.WriteFile(hr, []byte("154 20260904 52327\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	p1.setClaim("xx:xx:xx:xx:xx:xx") // same strap, different case
+
+	if data, _ := os.ReadFile(hr); len(data) == 0 {
+		t.Error("re-claiming the same strap blanked a live panel")
 	}
 }
