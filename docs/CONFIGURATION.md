@@ -56,7 +56,9 @@ Set `current` to your device MAC and add a matching `known` entry. The app conne
 
 ## Two straps
 
-gotempo can follow two heart-rate straps at once, for a two-player ITGmania cabinet or for recording two people together. It is off by default and costs nothing when unused.
+gotempo can follow two heart-rate straps at once, for recording two people together or for a two-player ITGmania cabinet. It is off by default and costs nothing when unused.
+
+gotempo's half is complete; the theme module's is not. The current `gotempo.lua` reads only `hr.txt` and hides the panel when both sides are joined, so `hr-p2.txt` is written and nothing draws it yet.
 
 `two_player` turns it on; `current_p2` is the second strap's MAC, in the same form as `current` and with a matching `known` entry. They are separate keys so that switching the mode off keeps the assignment: an operator can set a cabinet up once and toggle it without re-picking a strap.
 

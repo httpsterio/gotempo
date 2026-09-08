@@ -93,6 +93,8 @@ gotempo --two-player --player 2 --select-device
 
 The second strap writes its own `gotempo-bpm-p2.txt` and `hr-p2.txt`, and `--status` reports both. The first strap's filenames never change, so an existing OBS source or theme module keeps working. Off by default; see [Two straps](docs/CONFIGURATION.md#two-straps).
 
+The in-game panel is still single-player: the current `gotempo.lua` reads only `hr.txt` and hides itself when both sides are joined, so `hr-p2.txt` is written but nothing draws it yet. Two straps work today for OBS and for the CSV logs.
+
 
 ## ITGmania overlay
 
