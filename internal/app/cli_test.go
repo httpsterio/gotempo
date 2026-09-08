@@ -33,7 +33,7 @@ func TestParseFlags(t *testing.T) {
 		{"no-auto-log", []string{"--no-auto-log"}, cliOptions{noAutoLog: true}},
 		{"player 2", []string{"--player", "2"}, cliOptions{player: 2}},
 		{"two-player", []string{"--two-player"}, cliOptions{twoPlayer: true}},
-		{"no-two-player", []string{"--no-two-player"}, cliOptions{noTwoPlayer: true}},
+		{"one-player", []string{"--one-player"}, cliOptions{onePlayer: true}},
 		{"device on p2", []string{"--player", "2", "--device", "24:AC:AC:18:41:CC"},
 			cliOptions{player: 2, device: "24:AC:AC:18:41:CC"}},
 	}

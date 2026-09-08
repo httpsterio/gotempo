@@ -63,8 +63,8 @@ func Run() {
 		os.Exit(1)
 	}
 
-	if opts.twoPlayer && opts.noTwoPlayer {
-		fmt.Fprintln(os.Stderr, "--two-player and --no-two-player are mutually exclusive")
+	if opts.twoPlayer && opts.onePlayer {
+		fmt.Fprintln(os.Stderr, "--one-player and --two-player are mutually exclusive")
 		os.Exit(1)
 	}
 

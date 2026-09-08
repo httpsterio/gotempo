@@ -9,8 +9,9 @@ as a service/from scripts.
 The full flag set has shipped (see Done): `--no-tray`, `--list-devices`,
 `--status`, `--print-bpm` (+`--epoch`/`--timestamp`), `--json`, `--config`,
 `--version`/`-v`, `--autostart`/`--no-autostart`, `--device`, `--select-device`,
-`--auto-log`/`--no-auto-log`, `--quiet`, `--log-level`. The per-flag specs below
-describe the implemented behavior.
+`--auto-log`/`--no-auto-log`, `--quiet`, `--log-level`, plus the two-strap flags
+`--player`, `--two-player`/`--one-player`. The per-flag specs below describe the
+implemented behavior.
 
 Flags fall into two classes. **Session-only** flags (everything except the
 setup flags) affect the single run and never write `config.json` or disk.
@@ -206,6 +207,37 @@ WantedBy=default.target
   usage without manual start/stop.
 
 ## Done
+
+- **Two straps at once.** gotempo follows a second heart-rate strap, for a
+  two-player ITGmania cabinet or for recording two people. Off by default and
+  free when unused: with `two_player` false the second slot reads as
+  unconfigured, so its connection loop idles rather than being started and
+  stopped.
+  - `App` split into shared state (adapter, config, process signals) and a
+    `player` per strap (its `AppState`, CSV session, and its own `switchCh`, so
+    changing one strap's device cannot interrupt the other's connection). The
+    ITGmania writer and the OBS output path moved from package-level singletons
+    onto `AppState` first, which is what made two of everything possible.
+  - Machine-read files get fixed per-slot names (`gotempo-bpm-p2.txt`,
+    `hr-p2.txt`); the first strap's never change, so an OBS source or an
+    installed theme module keeps working. Session CSVs instead take `-p1`/`-p2`
+    only while two are recording, since a human reads those names.
+    `mostRecentSession` filters on that suffix, or one strap's logger would
+    resume another's file and interleave two people's readings.
+  - `status.json` gains an optional `player2` object rather than becoming an
+    array, so a single-strap file stays byte-identical.
+  - Tray: a **Two-player mode** checkbox above the device rows; with it on a
+    click cycles a strap through P1, P2 and unassigned, displacing whoever held
+    the slot. With it off the rows behave exactly as before.
+  - CLI: `--player <1|2>` addresses a slot for `--device`/`--select-device`/
+    `--print-bpm`; `--two-player`/`--one-player` set the count.
+  - Readings are gated on the player's claimed strap (`player.publishes`): a
+    player whose profile names a belt gets that belt or nothing, never a
+    fallback to the cabinet's configured one, which would draw whoever is
+    wearing that as the person playing. A claim change also breaks the CSV
+    session, since the gap-based resume rule cannot tell a new person from the
+    same workout. Nothing sets a claim yet; `setClaim` is the entry point for
+    the ITGmania module work.
 
 - **CLI batch 2: device, auto-log, logging.** Completes the flag set on top of
   the autostart flags.

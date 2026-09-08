@@ -68,7 +68,8 @@ Most straps allow one connection at a time, so disconnect the monitor from your 
 | Item | Behaviour |
 |---|---|
 | **Start logging** / **Stop logging** | Begin or stop logging: writes the current BPM to `gotempo-bpm.txt` and appends each reading to a per-session CSV (see [Files & configuration](docs/CONFIGURATION.md)). Greyed out when not applicable. |
-| **Device list** | Known devices (most-recently-used first) plus newly scanned ones, listed directly in the menu. Click one to switch; the current device is marked and not clickable. Up to six shown. |
+| **Two-player mode** | Follow two straps at once, for a two-player cabinet or for recording two people. Off by default; changes what clicking a device does, see below. |
+| **Device list** | Known devices (most-recently-used first) plus newly scanned ones, listed directly in the menu. Click one to switch; the current device is marked and not clickable. Up to six shown. With two-player mode on, a click instead cycles that strap through P1, P2 and unassigned, and the label shows `[P1]`/`[P2]`. |
 | **Rescan for new devices** | Runs a fresh 15-second scan; new monitors appear in the list. On Windows the list also includes monitors already paired in Settings, which a scan cannot see. |
 | **Open log folder** | Opens the log and CSV directory in a file browser. |
 | **Open config folder** | Opens the directory holding `config.json`. |
@@ -80,6 +81,17 @@ Most straps allow one connection at a time, so disconnect the monitor from your 
 ## Command line
 
 gotempo also runs headless, for systems without a tray or for scripts and status bars: connect without the tray (`--no-tray`), stream readings (`--print-bpm`), or report the running app's state (`--status`). Full flag reference, output formats, exit codes, and a systemd unit in [docs/CLI.md](docs/CLI.md).
+
+
+## Two straps
+
+gotempo can follow two heart-rate straps at once, for a two-player ITGmania cabinet or for recording two people together. Tick **Two-player mode** in the tray, then click a device to cycle it through P1, P2 and unassigned. Headless:
+
+```sh
+gotempo --two-player --player 2 --select-device
+```
+
+The second strap writes its own `gotempo-bpm-p2.txt` and `hr-p2.txt`, and `--status` reports both. The first strap's filenames never change, so an existing OBS source or theme module keeps working. Off by default; see [Two straps](docs/CONFIGURATION.md#two-straps).
 
 
 ## ITGmania overlay

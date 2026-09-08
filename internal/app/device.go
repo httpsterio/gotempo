@@ -190,12 +190,12 @@ func (a *App) setCurrentDevice(slot int, mac, name string) {
 	a.cfg.setCurrentFor(slot, mac)
 }
 
-// applySetupTwoPlayer handles --two-player / --no-two-player: it records the
+// applySetupTwoPlayer handles --two-player / --one-player: it records the
 // mode in the in-memory config (the caller persists it) and lets the run
 // proceed. Set-then-run like the device flags rather than set-then-exit like
 // --autostart, so one invocation can enable the mode and assign the strap.
 func (a *App) applySetupTwoPlayer(opts cliOptions) (changed bool) {
-	if !opts.twoPlayer && !opts.noTwoPlayer {
+	if !opts.twoPlayer && !opts.onePlayer {
 		return false
 	}
 	a.cfgMu.Lock()

@@ -31,12 +31,17 @@ type cliOptions struct {
 	config      string
 	itgModule   string
 
-	// player is which strap --device / --select-device apply to, 1 or 2. A
-	// modifier rather than a parallel --device-p2 flag, so it composes with the
-	// interactive picker and does not double every future per-slot option.
-	player      int
-	twoPlayer   bool
-	noTwoPlayer bool
+	// player is which strap --device, --select-device and --print-bpm apply to,
+	// 1 or 2. A modifier rather than a parallel --device-p2 flag, so it composes
+	// with the interactive picker and does not double every future per-slot
+	// option.
+	//
+	// It is an address, not a count: twoPlayer below is the count. They are
+	// deliberately spelled differently (a number versus a word) because "player"
+	// alone would be ambiguous between the two.
+	player    int
+	twoPlayer bool
+	onePlayer bool
 }
 
 // slot maps --player onto the internal slot index. parseFlags has already
@@ -116,9 +121,9 @@ func parseFlags(args []string) (cliOptions, error) {
 	fs.StringVar(&o.logLevel, "log-level", "", "stderr verbosity: error|info|debug (default info)")
 	fs.StringVar(&o.config, "config", "", "path to config.json (must already exist)")
 	fs.StringVar(&o.itgModule, "itgmania-module", "", "set the path to gotempo.lua in config (hr.txt is written beside it), then run")
-	fs.IntVar(&o.player, "player", 1, "which strap --device/--select-device apply to: 1 or 2")
+	fs.IntVar(&o.player, "player", 1, "which strap --device/--select-device/--print-bpm apply to: 1 or 2")
 	fs.BoolVar(&o.twoPlayer, "two-player", false, "follow two straps at once, then run")
-	fs.BoolVar(&o.noTwoPlayer, "no-two-player", false, "follow only the first strap, then run")
+	fs.BoolVar(&o.onePlayer, "one-player", false, "follow only the first strap, then run")
 	fs.Usage = func() {
 		out := fs.Output()
 		// Hand-rolled, grouped help: flag.PrintDefaults sorts alphabetically,
@@ -139,9 +144,9 @@ func parseFlags(args []string) (cliOptions, error) {
 		line("--no-autostart", "disable launch-on-login, then exit")
 		line("--device <mac>", "set the current device by MAC, then run")
 		line("--select-device", "interactively pick the current device, then run")
-		line("  --player <1|2>", "which strap the two flags above apply to (default 1)")
+		line("  --player <1|2>", "which strap those two and --print-bpm apply to (default 1)")
 		line("--two-player", "follow two straps at once, then run")
-		line("--no-two-player", "follow only the first strap, then run")
+		line("--one-player", "follow only the first strap, then run")
 		line("--itgmania-module", "set the path to gotempo.lua (<path>), then run")
 		fmt.Fprintln(out, "\nOptions:")
 		line("--auto-log", "force session logging on for this run")

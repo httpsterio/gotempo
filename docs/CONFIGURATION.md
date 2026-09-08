@@ -12,8 +12,10 @@ On Linux, gotempo uses standard XDG directories, created on first run:
 - `~/.local/share/gotempo/gotempo-bpm.txt`: current BPM as a raw integer, rewritten on each change. Empty when not logging (cleared the moment you stop). Keeps the last reading briefly across a short dropout, then clears after about ten seconds disconnected. Useful as an OBS text source. Honors `$XDG_DATA_HOME`.
 - `~/.local/share/gotempo/sessions/*.csv`: per-session history, one `timestamp,bpm` row per reading. Written while logging is on. A new file starts after a gap longer than `session_gap_minutes`; shorter breaks append to the current file. Readings below `min_bpm_threshold` (sensor off / no contact) are skipped, so they show as gaps in the timestamps rather than junk rows. Files are named by the session's first reading.
 - `<your ITGmania theme>/Modules/hr.txt`: one line, `<bpm> <YYYYMMDD> <secondsSinceLocalMidnight>`, rewritten on every reading. Only written when `itgmania_module` is set; the location follows that setting, not the XDG dirs. See [ITGmania overlay](#itgmania-overlay).
-- `~/.local/share/gotempo/status.json`: live app state published by the running app, independent of logging — connection, phase, logging flag, current BPM, and device. Read by `gotempo --status` (see [Command line](CLI.md)). Honors `$XDG_DATA_HOME`.
+- `~/.local/share/gotempo/status.json`: live app state published by the running app, independent of logging — connection, phase, logging flag, current BPM, and device. With a second strap in use it also carries a `player2` object. Read by `gotempo --status` (see [Command line](CLI.md)). Honors `$XDG_DATA_HOME`.
 - `internal/app/assets/` (source tree only): tray status icons and `logo.png`, embedded in the binary at build time.
+
+With [two straps](#two-straps) the second one writes `gotempo-bpm-p2.txt` and `hr-p2.txt` beside the first's files, and session CSVs gain `-p1`/`-p2` in their names. The first strap's paths never change.
 
 ### Windows
 
@@ -32,6 +34,8 @@ directory on Windows. That is intended.
 ```json
 {
   "current": "24:AC:AC:18:41:CC",
+  "current_p2": "",
+  "two_player": false,
   "known": [
     {
       "mac": "24:AC:AC:18:41:CC",
@@ -49,6 +53,34 @@ directory on Windows. That is intended.
 Set `current` to your device MAC and add a matching `known` entry. The app connects to it on next launch without scanning.
 
 `session_gap_minutes` (default 60) is the idle span that ends a CSV session: a longer gap between readings starts a new file, a shorter one continues the current session. `min_bpm_threshold` (default 20) is the validity floor; readings below it are treated as no-contact noise and left out of the CSV. Both keys are optional and only needed to override the defaults.
+
+## Two straps
+
+gotempo can follow two heart-rate straps at once, for a two-player ITGmania cabinet or for recording two people together. It is off by default and costs nothing when unused.
+
+`two_player` turns it on; `current_p2` is the second strap's MAC, in the same form as `current` and with a matching `known` entry. They are separate keys so that switching the mode off keeps the assignment: an operator can set a cabinet up once and toggle it without re-picking a strap.
+
+```json
+"current": "24:AC:AC:18:41:CC",
+"current_p2": "11:22:33:44:55:66",
+"two_player": true
+```
+
+`current_p2` is ignored while `two_player` is false, so that slot simply idles.
+
+The second strap gets its own copy of every output. The first strap's filenames never change, so an OBS source or an installed theme module keeps working when you switch the mode on:
+
+| | First strap | Second strap |
+|---|---|---|
+| OBS text source | `gotempo-bpm.txt` | `gotempo-bpm-p2.txt` |
+| ITGmania overlay | `hr.txt` | `hr-p2.txt` |
+| `status.json` | top-level fields | `player2` object |
+
+Session CSVs are the exception, because a person reads those filenames rather than a program: with one strap they stay unsuffixed, and with two they become `2026-09-08T14-30-00-p1.csv` and `…-p2.csv`. Switching the mode therefore starts a new file rather than continuing the last one.
+
+Session logging is one process-wide toggle: it is on or off for both straps together.
+
+From the tray, tick **Two-player mode** and then click a device to cycle it through P1, P2 and unassigned; the row label shows `[P1]`/`[P2]`. From the command line, see [Two straps](CLI.md#two-straps).
 
 ## ITGmania overlay
 
