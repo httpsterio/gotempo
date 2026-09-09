@@ -43,6 +43,19 @@ import (
 // the two names directly and needs no fallback logic in Lua.
 const itgHRBase = "hr"
 
+// itgDataDir is the folder beside gotempo.lua that holds everything this feature
+// writes. The module's own .lua cannot live there -- Simply Love lists Modules/
+// without recursing and keeps only *.lua -- but its files can, which keeps them
+// from being loose among every other module's.
+const itgDataDir = "gotempo"
+
+// itgDir is that folder, derived from the configured module path. Both sides
+// resolve it the same way, which is why the channel needs no configuration of
+// its own.
+func itgDir(module string) string {
+	return filepath.Join(filepath.Dir(module), itgDataDir)
+}
+
 // itgWriter owns one hr.txt. There is one per connected strap rather than one
 // per process: a two-player cabinet writes a separate file per side, and the
 // AppState that blanks the panel on disconnect holds its own writer, so the
@@ -71,7 +84,7 @@ type itgWriter struct {
 // theme's Modules/ folder is a real, existing file that the running game never
 // reads, and nothing here can detect that.
 func itgHRPathFor(module string, slot int) string {
-	return filepath.Join(filepath.Dir(module), itgHRBase+slotSuffix(slot)+".txt")
+	return filepath.Join(itgDir(module), itgHRBase+slotSuffix(slot)+".txt")
 }
 
 // setupITG validates the configured module path once, at startup, and returns
@@ -97,6 +110,14 @@ func setupITG(module string, slot int) *itgWriter {
 		logErrf("[ITG] itgmania_module is a directory, want the gotempo.lua file: %s", module)
 		return w
 	}
+	// The one directory this feature owns, under a module path that just
+	// validated. Creating it is not the phantom-tree risk the note above guards
+	// against: a wrong itgmania_module has already been rejected by then. It
+	// normally ships with the module, and this only covers a partial install.
+	if err := os.MkdirAll(itgDir(module), 0755); err != nil {
+		logErrf("[ITG] could not create %s: %v", itgDir(module), err)
+	}
+
 	w.path = itgHRPathFor(module, slot)
 	return w
 }

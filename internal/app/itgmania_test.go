@@ -26,8 +26,9 @@ func TestITGLineZeroPadsDate(t *testing.T) {
 }
 
 func TestITGHRPathFor(t *testing.T) {
-	got := itgHRPathFor(filepath.Join("/home/u/.itgmania/Themes/Simply Love/Modules", "gotempo.lua"), slotP1)
-	want := filepath.Join("/home/u/.itgmania/Themes/Simply Love/Modules", "hr.txt")
+	const modules = "/home/u/.itgmania/Themes/Simply Love/Modules"
+	got := itgHRPathFor(filepath.Join(modules, "gotempo.lua"), slotP1)
+	want := filepath.Join(modules, "gotempo", "hr.txt")
 	if got != want {
 		t.Errorf("itgHRPathFor = %q, want %q", got, want)
 	}
@@ -65,7 +66,7 @@ func TestWriteAndClearITG(t *testing.T) {
 	if !w.enabled() {
 		t.Fatal("overlay not enabled for an existing module")
 	}
-	hr := filepath.Join(dir, "hr.txt")
+	hr := filepath.Join(dir, "gotempo", "hr.txt")
 	if w.target() != hr {
 		t.Fatalf("target = %q, want %q", w.target(), hr)
 	}
@@ -114,7 +115,7 @@ func TestITGWritersAreIndependent(t *testing.T) {
 	b.write(88, now)
 
 	read := func(dir string) string {
-		data, err := os.ReadFile(filepath.Join(dir, "hr.txt"))
+		data, err := os.ReadFile(filepath.Join(dir, "gotempo", "hr.txt"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -175,7 +176,7 @@ func TestClearOutputLeavesITGFile(t *testing.T) {
 	s.attachITG(w)
 	s.clearOutput()
 
-	data, err := os.ReadFile(filepath.Join(dir, "hr.txt"))
+	data, err := os.ReadFile(filepath.Join(dir, "gotempo", "hr.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}

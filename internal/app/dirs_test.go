@@ -58,8 +58,9 @@ func TestDirsAreConfigured(t *testing.T) {
 	}
 }
 
-// The first strap keeps the original filenames so an OBS source or an installed
-// Lua module pointed at them keeps working when two-player mode is switched on.
+// The first strap keeps the original OBS filename, so a source pointed at it
+// keeps working when two-player mode is switched on. The ITGmania files live in
+// the module's own subfolder, one per slot.
 func TestSlotPathsKeepP1Stable(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/data")
 
@@ -71,12 +72,13 @@ func TestSlotPathsKeepP1Stable(t *testing.T) {
 	}
 
 	module := filepath.Join("/themes", "Simply Love", "Modules", "gotempo.lua")
-	if got, want := itgHRPathFor(module, slotP1), filepath.Join(filepath.Dir(module), "hr.txt"); got != want {
+	data := filepath.Join(filepath.Dir(module), "gotempo")
+	if got, want := itgHRPathFor(module, slotP1), filepath.Join(data, "hr.txt"); got != want {
 		t.Errorf("P1 overlay = %q, want %q", got, want)
 	}
 	// Deliberately hr-p2.txt and not hr-p1.txt/hr-p2.txt: an already-installed
 	// module reads hr.txt and must keep working untouched.
-	if got, want := itgHRPathFor(module, slotP2), filepath.Join(filepath.Dir(module), "hr-p2.txt"); got != want {
+	if got, want := itgHRPathFor(module, slotP2), filepath.Join(data, "hr-p2.txt"); got != want {
 		t.Errorf("P2 overlay = %q, want %q", got, want)
 	}
 }

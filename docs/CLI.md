@@ -103,7 +103,7 @@ BPM without a running app" mode would be a separate flag; it isn't implemented.)
 Plain output is a single line, e.g. `connected, 61 bpm, Polar H10, logging off`,
 `reconnecting, Polar H10, logging on`, `idle, no device`, or `gotempo is not
 running`. When the ITGmania overlay is on, a second line names the resolved
-target, e.g. `itgmania: /home/you/.itgmania/Themes/Simply Love/Modules/hr.txt`,
+target, e.g. `itgmania: /home/you/.itgmania/Themes/Simply Love/Modules/gotempo/hr.txt`,
 so a misconfigured path is visible rather than silent.
 
 With a second strap in use every line gains a `P1: `/`P2: ` prefix, so two-player
@@ -118,7 +118,7 @@ The exit code follows the first strap. `--json` gives the full state for
 scripting:
 
 ```json
-{"running":true,"connected":true,"phase":"connected","logging":false,"bpm":61,"device":{"mac":"24:AC:AC:18:41:CC","name":"Polar H10"},"itgmania":"/home/you/.itgmania/Themes/Simply Love/Modules/hr.txt","timestamp":"2026-06-16T02:40:00+03:00"}
+{"running":true,"connected":true,"phase":"connected","logging":false,"bpm":61,"device":{"mac":"24:AC:AC:18:41:CC","name":"Polar H10"},"itgmania":"/home/you/.itgmania/Themes/Simply Love/Modules/gotempo/hr.txt","timestamp":"2026-06-16T02:40:00+03:00"}
 ```
 
 `phase` is one of `idle` (no device), `connecting`, `reconnecting` (device lost,

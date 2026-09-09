@@ -333,7 +333,7 @@ func TestMarkConnectedSkipsDrivenSlots(t *testing.T) {
 
 func TestPlayersPathFor(t *testing.T) {
 	module := filepath.Join("/themes", "Simply Love", "Modules", "gotempo.lua")
-	want := filepath.Join(filepath.Dir(module), "players.txt")
+	want := filepath.Join(filepath.Dir(module), "gotempo", "players.txt")
 	if got := playersPathFor(module); got != want {
 		t.Errorf("playersPathFor = %q, want %q", got, want)
 	}

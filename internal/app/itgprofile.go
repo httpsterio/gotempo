@@ -49,7 +49,7 @@ const itgClaimTimeout = 10 * time.Second
 // itgHRPathFor does. Both sides resolve this directory independently, which is
 // why the channel needs no configuration of its own.
 func playersPathFor(module string) string {
-	return filepath.Join(filepath.Dir(module), playersFile)
+	return filepath.Join(itgDir(module), playersFile)
 }
 
 // itgSides is what the game reports: per slot, whether anyone is on that side

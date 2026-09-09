@@ -11,7 +11,7 @@ On Linux, gotempo uses standard XDG directories, created on first run:
 - `~/.config/gotempo/config.json`: saved device, known-device history, and preferences. Managed by the app; edit it by hand as described below. Honors `$XDG_CONFIG_HOME`.
 - `~/.local/share/gotempo/gotempo-bpm.txt`: current BPM as a raw integer, rewritten on each change. Empty when not logging (cleared the moment you stop). Keeps the last reading briefly across a short dropout, then clears after about ten seconds disconnected. Useful as an OBS text source. Honors `$XDG_DATA_HOME`.
 - `~/.local/share/gotempo/sessions/*.csv`: per-session history, one `timestamp,bpm` row per reading. Written while logging is on. A new file starts after a gap longer than `session_gap_minutes`; shorter breaks append to the current file. Readings below `min_bpm_threshold` (sensor off / no contact) are skipped, so they show as gaps in the timestamps rather than junk rows. Files are named by the session's first reading.
-- `<your ITGmania theme>/Modules/hr.txt`: one line, `<bpm> <YYYYMMDD> <secondsSinceLocalMidnight>`, rewritten on every reading. Only written when `itgmania_module` is set; the location follows that setting, not the XDG dirs. See [ITGmania overlay](#itgmania-overlay).
+- `<your ITGmania theme>/Modules/gotempo/hr.txt`: one line, `<bpm> <YYYYMMDD> <secondsSinceLocalMidnight>`, rewritten on every reading. Only written when `itgmania_module` is set; the location follows that setting, not the XDG dirs. See [ITGmania overlay](#itgmania-overlay).
 - `~/.local/share/gotempo/status.json`: live app state published by the running app, independent of logging — connection, phase, logging flag, current BPM, and device. With a second strap in use it also carries a `player2` object. Read by `gotempo --status` (see [Command line](CLI.md)). Honors `$XDG_DATA_HOME`.
 - `internal/app/assets/` (source tree only): tray status icons and `logo.png`, embedded in the binary at build time.
 
@@ -73,7 +73,7 @@ The second strap gets its own copy of every output. The first strap's filenames 
 | | First strap | Second strap |
 |---|---|---|
 | OBS text source | `gotempo-bpm.txt` | `gotempo-bpm-p2.txt` |
-| ITGmania overlay | `hr.txt` | `hr-p2.txt` |
+| ITGmania overlay | `gotempo/hr.txt` | `gotempo/hr-p2.txt` |
 | `status.json` | top-level fields | `player2` object |
 
 Session CSVs are the exception, because a person reads those filenames rather than a program: with one strap they stay unsuffixed, and with two they become `2026-09-08T14-30-00-p1.csv` and `…-p2.csv`. Switching the mode therefore starts a new file rather than continuing the last one.
@@ -93,7 +93,7 @@ Add `gotempo.ini` to the profile directory (alongside the `GrooveStats.ini` and 
 Device=24:AC:AC:18:41:CC
 ```
 
-Nothing else is needed. The module publishes `players.txt` beside `gotempo.lua` once a second while the game is on a song-select, gameplay or evaluation screen; gotempo reads it and moves the straps. The strap must be paired to the machine once beforehand, the same as any strap gotempo connects to.
+Nothing else is needed. The module publishes `players.txt` in its own folder beside `gotempo.lua` once a second while the game is on a song-select, gameplay or evaluation screen; gotempo reads it and moves the straps. The strap must be paired to the machine once beforehand, the same as any strap gotempo connects to.
 
 | The player | gotempo follows |
 |---|---|

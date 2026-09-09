@@ -91,7 +91,7 @@ gotempo can follow two heart-rate straps at once, for a two-player ITGmania cabi
 gotempo --two-player --player 2 --select-device
 ```
 
-The second strap writes its own `gotempo-bpm-p2.txt` and `hr-p2.txt`, and `--status` reports both. The first strap's filenames never change, so an existing OBS source or theme module keeps working. Off by default; see [Two straps](docs/CONFIGURATION.md#two-straps).
+The second strap writes its own `gotempo-bpm-p2.txt` and `gotempo/hr-p2.txt`, and `--status` reports both. The first strap's filenames never change, so an existing OBS source or theme module keeps working. Off by default; see [Two straps](docs/CONFIGURATION.md#two-straps).
 
 On a cabinet, a player can name their own strap in their ITGmania profile and gotempo follows it while they play, with no trip to the tray menu. Add `gotempo.ini` to their profile folder:
 
