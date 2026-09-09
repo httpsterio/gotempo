@@ -129,12 +129,19 @@ type player struct {
 	// operator's config (the ITGmania module, once that lands) and never
 	// persisted, so quitting returns to config.json.
 	//
-	// override is the strap this side should follow; empty means use config.
-	// claimed is the strap the person on this side says is theirs, read from
-	// their game profile; empty means they claimed nothing. They are separate
-	// because the second one gates output rather than selecting a device: see
-	// publishes.
+	// driven says whether that outside source is currently assigning this slot.
+	// It is what makes an *empty* override mean "idle" rather than "fall back to
+	// config", which matters for the side nobody is standing on: without it, a
+	// lone player on P2 would have slot 1 quietly connect the configured strap
+	// as well.
+	//
+	// override is the strap this side should follow, meaningful only while
+	// driven. claimed is the strap the person on this side says is theirs, read
+	// from their game profile; empty means they named nothing. The two are
+	// separate because the second gates output rather than selecting a device:
+	// see publishes.
 	assignMu sync.Mutex
+	driven   bool
 	override string
 	claimed  string
 
@@ -237,26 +244,35 @@ func newPlayer(a *App, slot int, cfg *Config) *player {
 // keep fixed names per slot so an OBS source or a Lua module never sees a path
 // move, while these are named for whoever reads the folder.
 func (p *player) sessionSuffix() string {
-	if !p.app.snapshotConfig().TwoPlayer {
+	// Keyed off how many straps are actually being followed, not off the
+	// two-player config flag: a profile can drive the second slot with that flag
+	// off, and both loggers would then write the same unsuffixed filename and
+	// interleave two people's readings into one file.
+	active := 0
+	for _, q := range p.app.players {
+		if q.effectiveMAC() != "" {
+			active++
+		}
+	}
+	if active < 2 {
 		return ""
 	}
 	return "-p" + strconv.Itoa(p.slot+1)
 }
 
-// setOverride installs or clears the transient strap assignment and wakes the
-// connection loop so it picks the change up. Passing "" restores the configured
-// strap.
-func (p *player) setOverride(mac string) {
+// setAssignment installs the transient strap assignment and wakes the
+// connection loop. driven=false hands the slot back to config; driven=true with
+// an empty mac means this side is deliberately idle, which is not the same
+// thing.
+func (p *player) setAssignment(driven bool, mac string) {
 	p.assignMu.Lock()
-	changed := p.override != mac
-	p.override = mac
+	changed := p.driven != driven || p.override != mac
+	p.driven, p.override = driven, mac
 	p.assignMu.Unlock()
 	if !changed {
 		return
 	}
-	p.state.onSwitch()
-	p.setPhase(phaseConnecting)
-	p.signalSwitch()
+	p.reassigned()
 	p.app.signalUI()
 }
 
@@ -265,10 +281,10 @@ func (p *player) setOverride(mac string) {
 // which is how P2 sits quiet while two-player mode is off.
 func (p *player) effectiveMAC() string {
 	p.assignMu.Lock()
-	override := p.override
+	driven, override := p.driven, p.override
 	p.assignMu.Unlock()
-	if override != "" {
-		return override
+	if driven {
+		return override // authoritative, empty included
 	}
 	return p.currentMAC()
 }
@@ -608,6 +624,20 @@ func (p *player) switchTo(mac, name string) {
 	p.signalSwitch()
 	a.signalUI()
 	logInfof("[BLE] switching to %s (%s)", name, mac)
+}
+
+// markConnected records the connection unless this slot is being driven from
+// outside. A visiting player's strap must not end up in the cabinet's config:
+// ITGmania never writes there, and the tray's device list would otherwise fill
+// with straps belonging to people who have gone home.
+func (p *player) markConnected(mac string) {
+	p.assignMu.Lock()
+	driven := p.driven
+	p.assignMu.Unlock()
+	if driven {
+		return
+	}
+	p.app.markConnected(mac)
 }
 
 // markConnected records a successful connection's timestamp and persists it.
@@ -1003,7 +1033,7 @@ func (p *player) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Ad
 	p.setConnMAC(addr.MAC.String())
 	p.state.onConnect()
 	p.setPhase(phaseConnected)
-	p.app.markConnected(addr.MAC.String())
+	p.markConnected(addr.MAC.String())
 	if wasNotified {
 		notify("reconnected")
 	}

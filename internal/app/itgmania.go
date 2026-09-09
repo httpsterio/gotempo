@@ -127,11 +127,9 @@ func (w *itgWriter) target() string {
 
 // itgLine formats one reading. The time must be local: see the note above.
 func itgLine(bpm int, now time.Time) string {
-	return fmt.Sprintf("%d %04d%02d%02d %d\n",
-		bpm,
-		now.Year(), int(now.Month()), now.Day(),
-		now.Hour()*3600+now.Minute()*60+now.Second(),
-	)
+	// dateStamp/secondsOfDay are shared with the players.txt reader, so both
+	// directions of this channel agree on the format by construction.
+	return fmt.Sprintf("%d %08d %d\n", bpm, dateStamp(now), secondsOfDay(now))
 }
 
 // write publishes one reading, for every reading received. os.WriteFile is the

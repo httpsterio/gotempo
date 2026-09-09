@@ -101,54 +101,64 @@ func TestP1IsTheFirstPlayer(t *testing.T) {
 	}
 }
 
-// The override is the ITGmania module's channel into device selection. It wins
-// over config, and clearing it returns to whatever the operator configured,
-// which is what makes a cabinet fall back cleanly when the game exits.
-func TestEffectiveMACPrefersOverride(t *testing.T) {
+// The assignment is the game's channel into device selection. While it is
+// driving it wins over config, and releasing it returns to whatever the operator
+// configured, which is what makes a cabinet fall back cleanly when the game
+// exits.
+func TestEffectiveMACPrefersAssignment(t *testing.T) {
 	_, p1, _ := twoPlayerApp(t)
 
 	if got := p1.effectiveMAC(); got != "AA:AA:AA:AA:AA:AA" {
-		t.Errorf("with no override, effectiveMAC = %q, want the config value", got)
+		t.Errorf("undriven, effectiveMAC = %q, want the config value", got)
 	}
 
-	p1.setOverride("CC:CC:CC:CC:CC:CC")
+	p1.setAssignment(true, "CC:CC:CC:CC:CC:CC")
 	if got := p1.effectiveMAC(); got != "CC:CC:CC:CC:CC:CC" {
-		t.Errorf("with an override, effectiveMAC = %q, want the override", got)
+		t.Errorf("driven, effectiveMAC = %q, want the assignment", got)
 	}
 	if got := p1.currentMAC(); got != "AA:AA:AA:AA:AA:AA" {
-		t.Errorf("override leaked into config: currentMAC = %q", got)
+		t.Errorf("assignment leaked into config: currentMAC = %q", got)
 	}
 
-	p1.setOverride("")
+	// Driven with nothing means deliberately idle, NOT "fall back to config".
+	// This is the distinction the driven flag exists for: the side nobody is
+	// standing on must not quietly connect the configured strap as well.
+	p1.setAssignment(true, "")
+	if got := p1.effectiveMAC(); got != "" {
+		t.Errorf("driven with no strap, effectiveMAC = %q, want idle", got)
+	}
+
+	// Releasing is what hands the slot back.
+	p1.setAssignment(false, "")
 	if got := p1.effectiveMAC(); got != "AA:AA:AA:AA:AA:AA" {
-		t.Errorf("after clearing, effectiveMAC = %q, want the config value again", got)
+		t.Errorf("after release, effectiveMAC = %q, want the config value again", got)
 	}
 }
 
 // Setting an override must wake the connection loop, or the strap would not
 // change until something else happened to signal it.
-func TestSetOverrideSignalsTheLoop(t *testing.T) {
+func TestSetAssignmentSignalsTheLoop(t *testing.T) {
 	_, p1, p2 := twoPlayerApp(t)
 
-	p1.setOverride("CC:CC:CC:CC:CC:CC")
+	p1.setAssignment(true, "CC:CC:CC:CC:CC:CC")
 
 	select {
 	case <-p1.switchCh:
 	default:
-		t.Error("setOverride did not wake P1's loop")
+		t.Error("setAssignment did not wake P1's loop")
 	}
 	select {
 	case <-p2.switchCh:
-		t.Error("setting P1's override woke P2")
+		t.Error("assigning P1 woke P2")
 	default:
 	}
 
 	// Setting the same value again is not a change and must not churn the
 	// connection.
-	p1.setOverride("CC:CC:CC:CC:CC:CC")
+	p1.setAssignment(true, "CC:CC:CC:CC:CC:CC")
 	select {
 	case <-p1.switchCh:
-		t.Error("re-setting the same override restarted the connection")
+		t.Error("re-setting the same assignment restarted the connection")
 	default:
 	}
 }

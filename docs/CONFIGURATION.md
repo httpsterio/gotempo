@@ -84,6 +84,31 @@ Session logging is one process-wide toggle: it is on or off for both straps toge
 
 From the tray, tick **Two-player mode** and then click a device to cycle it through P1, P2 and unassigned; the row label shows `[P1]`/`[P2]`. From the command line, see [Two straps](CLI.md#two-straps).
 
+## Straps from ITGmania profiles
+
+A player can name their own strap in their ITGmania profile, and gotempo follows it while they are playing. This is for cabinets: picking a strap is otherwise a job someone does at the PC, which nobody does mid-session.
+
+Add `gotempo.ini` to the profile directory (alongside the `GrooveStats.ini` and `ArrowCloud.ini` other modules use):
+
+```ini
+[gotempo]
+Device=24:AC:AC:18:41:CC
+```
+
+Nothing else is needed. The module publishes `players.txt` beside `gotempo.lua` once a second while the game is on a song-select, gameplay or evaluation screen; gotempo reads it and moves the straps. The strap must be paired to the machine once beforehand, the same as any strap gotempo connects to.
+
+| The player | gotempo follows |
+|---|---|
+| is not playing | nothing on that side |
+| is playing, named a strap | that strap, and shows readings only from it |
+| is playing, named nothing | the configured strap, exactly as before |
+
+A player who named a strap gets that strap or nothing. gotempo will not fall back to the machine's configured strap for them, because that strap is on somebody else and drawing its readings as theirs would be wrong in a way nobody would notice.
+
+The assignment is never written to `config.json`. It lives in memory, so quitting gotempo, or ITGmania exiting or crashing, returns every slot to whatever the tray is set to. That also means a visiting player's strap never joins the machine's device list.
+
+`players.txt` carries the module's own clock, and gotempo releases the straps when that stamp stops advancing. This is what covers the game being killed rather than closed.
+
 ## ITGmania overlay
 
 gotempo can drive `gotempo.lua`, a Simply Love theme module that draws your heart rate on ITGmania's gameplay screen. The module is installed separately; gotempo's side is one config key.

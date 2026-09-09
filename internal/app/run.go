@@ -178,6 +178,18 @@ func cmdRun(opts cliOptions) int {
 	// and logs why.
 	app.attachITG(app.snapshotConfig().ITGmaniaModule)
 
+	// Follow the players' own profiles while the game is running. Started only
+	// when the overlay is configured, so a desktop user never polls for a file
+	// that will not exist.
+	if module := app.snapshotConfig().ITGmaniaModule; module != "" {
+		path := playersPathFor(module)
+		// Once synchronously before the workers start, so a cabinet does not
+		// connect the configured strap only to drop it a second later when the
+		// first poll says somebody else's profile is driving.
+		app.applyProfiles(path)
+		go app.followProfiles(path)
+	}
+
 	// Apply the session-only logging override (config value, with headless
 	// defaulting on and --auto-log/--no-auto-log winning). Not persisted.
 	cfgAutoLog := app.snapshotConfig().AutoLog
