@@ -258,6 +258,7 @@ func (a *App) runTray() {
 		t := &tray{
 			app:        a,
 			mLog:       systray.AddMenuItem("Start logging", ""),
+			cabinet:    a.snapshotConfig().ITGmaniaModule != "",
 			slotMACs:   make([]string, maxSwitchSlots),
 			slotNames:  make([]string, maxSwitchSlots),
 			slotClicks: make(chan int),
@@ -270,6 +271,13 @@ func (a *App) runTray() {
 		// slots are pre-created here so they keep their position between the
 		// logging controls and the toggles, then shown/hidden as devices appear.
 		systray.AddSeparator()
+
+		// Explains every greyed control below it in one line, rather than
+		// repeating the reason on each row. Inert, and hidden unless a profile
+		// is actually driving a slot.
+		t.mDriven = systray.AddMenuItem("ITGmania is choosing straps", "")
+		t.mDriven.Disable()
+		t.mDriven.Hide()
 
 		// Directly above the device rows, so it reads as a heading for them
 		// rather than another unrelated preference down with the toggles.

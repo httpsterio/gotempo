@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,44 +26,91 @@ func twoPlayerApp(t *testing.T) (*App, *player, *player) {
 		p.state = newAppState(filepath.Join(dir, []string{"p1.txt", "p2.txt"}[i]), true)
 		p.session = newSessionLogger(filepath.Join(dir, "sessions"), p.sessionSuffix, cfg.sessionGap(), cfg.minBPM(), true)
 	}
+	// Subscribe the slots as startWorkers would, without starting any
+	// goroutine: a.started stays false, so the straps exist but never connect.
+	a.followAll()
 	return a, a.players[slotP1], a.players[slotP2]
 }
 
-// Each player owns its switch channel. A shared one is what would make changing
-// P1's strap tear down P2's live connection, which is the specific bug this
-// split exists to prevent.
-func TestPlayersHaveOwnSwitchChannel(t *testing.T) {
-	_, p1, p2 := twoPlayerApp(t)
-
-	if p1.switchCh == p2.switchCh {
-		t.Fatal("players share one switch channel")
-	}
-
-	p1.signalSwitch()
-
+// retired reports whether a strap has been torn down, which is what the pool's
+// explicit-release and eviction paths do.
+func retired(s *strap) bool {
 	select {
-	case <-p2.switchCh:
-		t.Error("signalling P1 woke P2's connection loop")
+	case <-s.stopCh:
+		return true
 	default:
-	}
-	select {
-	case <-p1.switchCh:
-	default:
-		t.Error("signalling P1 did not wake P1")
+		return false
 	}
 }
 
-// signalSwitch must never block: the channel is buffered to one and a second
-// signal while one is pending is dropped, since the loop re-reads the device
-// when it wakes either way.
-func TestSignalSwitchDoesNotBlock(t *testing.T) {
+// Each slot subscribes to its own strap, and moving one must leave the other's
+// alone. A shared connection is what would make changing P1's device tear down
+// P2's live session, which is the specific bug this split exists to prevent.
+func TestSlotsHoldSeparateStraps(t *testing.T) {
+	_, p1, p2 := twoPlayerApp(t)
+
+	if p1.strap == nil || p2.strap == nil {
+		t.Fatal("slots did not subscribe to their configured straps")
+	}
+	if p1.strap == p2.strap {
+		t.Fatal("both slots share one strap")
+	}
+	before := p2.strap
+
+	p1.setAssignment(true, "CC:CC:CC:CC:CC:CC")
+
+	if p2.strap != before {
+		t.Error("reassigning P1 moved P2 off its strap")
+	}
+	if retired(before) {
+		t.Error("reassigning P1 tore down P2's connection")
+	}
+	if p1.strap == nil || !strings.EqualFold(p1.strap.mac, "CC:CC:CC:CC:CC:CC") {
+		t.Errorf("P1 is on %v, want the new strap", p1.strap)
+	}
+}
+
+// The menu round trip, which is the whole reason the pool exists. ITGmania
+// drives P1 to the strap config already names, then stops naming it. Neither
+// transition may touch the connection: this happens every time someone walks
+// back from the song wheel, and it used to cost a full reconnect (~30s of no
+// readings) for a MAC that never changed.
+func TestReleaseToTheSameStrapKeepsTheConnection(t *testing.T) {
 	_, p1, _ := twoPlayerApp(t)
 
-	for i := 0; i < 5; i++ {
-		p1.signalSwitch()
+	s := p1.strap
+	if s == nil {
+		t.Fatal("P1 did not subscribe to its configured strap")
 	}
-	if len(p1.switchCh) != 1 {
-		t.Errorf("switchCh holds %d signals, want 1", len(p1.switchCh))
+
+	// A live session with something on the in-game panel, which is what a
+	// spurious teardown would blank.
+	dir := t.TempDir()
+	w := setupITG(writeModule(t, dir), slotP1)
+	p1.state.attachITG(w)
+	s.wentUp()
+	s.deliver(154)
+
+	p1.setAssignment(true, "aa:aa:aa:aa:aa:aa") // same belt, as a profile spells it
+	if p1.strap != s {
+		t.Error("being driven to the configured strap rebuilt the connection")
+	}
+
+	p1.setAssignment(false, "") // back to the main menu
+	if p1.strap != s {
+		t.Error("the release rebuilt the connection")
+	}
+	if retired(s) {
+		t.Error("the release tore the strap down")
+	}
+	if !p1.isConnected() {
+		t.Error("the round trip left the slot disconnected")
+	}
+	// onSwitch clears the overlay, so an assignment that resolves to the strap
+	// already connected must not reach it: the panel would blink every time
+	// somebody walked to the menu and back.
+	if data, _ := os.ReadFile(w.target()); len(data) == 0 {
+		t.Error("the round trip blanked the in-game panel")
 	}
 }
 
@@ -135,31 +183,27 @@ func TestEffectiveMACPrefersAssignment(t *testing.T) {
 	}
 }
 
-// Setting an override must wake the connection loop, or the strap would not
-// change until something else happened to signal it.
-func TestSetAssignmentSignalsTheLoop(t *testing.T) {
+// Setting an override must move the slot onto the named strap, or the profile
+// would have no effect until something else happened to disturb the slot.
+func TestSetAssignmentMovesTheSlot(t *testing.T) {
 	_, p1, p2 := twoPlayerApp(t)
+	p2Before := p2.strap
 
 	p1.setAssignment(true, "CC:CC:CC:CC:CC:CC")
 
-	select {
-	case <-p1.switchCh:
-	default:
-		t.Error("setAssignment did not wake P1's loop")
+	if p1.strap == nil || !strings.EqualFold(p1.strap.mac, "CC:CC:CC:CC:CC:CC") {
+		t.Error("setAssignment did not move P1 onto the named strap")
 	}
-	select {
-	case <-p2.switchCh:
-		t.Error("assigning P1 woke P2")
-	default:
+	if p2.strap != p2Before {
+		t.Error("assigning P1 moved P2")
 	}
 
 	// Setting the same value again is not a change and must not churn the
 	// connection.
+	s := p1.strap
 	p1.setAssignment(true, "CC:CC:CC:CC:CC:CC")
-	select {
-	case <-p1.switchCh:
-		t.Error("re-setting the same assignment restarted the connection")
-	default:
+	if p1.strap != s {
+		t.Error("re-setting the same assignment rebuilt the connection")
 	}
 }
 
@@ -283,36 +327,28 @@ func TestCycleAssignmentDisplaces(t *testing.T) {
 
 // The end-to-end tray path: cycling persists, and wakes only the loops whose
 // strap actually changed.
-func TestAssignSlotsWakesOnlyChangedLoops(t *testing.T) {
+func TestAssignSlotsMovesOnlyTheChangedSlot(t *testing.T) {
 	a, p1, p2 := twoPlayerApp(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	drain := func() {
-		select {
-		case <-p1.switchCh:
-		default:
-		}
-		select {
-		case <-p2.switchCh:
-		default:
-		}
-	}
-	drain()
+
+	p1Before, dropped := p1.strap, p2.strap
 
 	// Reassign P2 only; P1's live connection must not be disturbed.
 	a.assignSlots([2]string{"AA:AA:AA:AA:AA:AA", "CC:CC:CC:CC:CC:CC"}, KnownDevice{MAC: "CC:CC:CC:CC:CC:CC"})
 
-	select {
-	case <-p1.switchCh:
-		t.Error("reassigning P2 interrupted P1's connection")
-	default:
+	if p1.strap != p1Before {
+		t.Error("reassigning P2 moved P1 off its strap")
 	}
-	select {
-	case <-p2.switchCh:
-	default:
-		t.Error("P2 was reassigned but its loop was not woken")
+	if retired(p1Before) {
+		t.Error("reassigning P2 tore down P1's connection")
 	}
 	if got := p2.effectiveMAC(); got != "CC:CC:CC:CC:CC:CC" {
 		t.Errorf("P2 = %q, want the new strap", got)
+	}
+	// An operator picking a different device says "not that one", so the strap
+	// it replaces goes at once rather than being kept warm.
+	if !retired(dropped) {
+		t.Error("the replaced strap was left in the pool")
 	}
 }
 
@@ -321,25 +357,22 @@ func TestAssignSlotsWakesOnlyChangedLoops(t *testing.T) {
 func TestSetTwoPlayerLeavesP1Alone(t *testing.T) {
 	a, p1, p2 := twoPlayerApp(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	select {
-	case <-p1.switchCh:
-	default:
-	}
+
+	p1Before, dropped := p1.strap, p2.strap
 
 	a.setTwoPlayer(false)
 
-	select {
-	case <-p1.switchCh:
-		t.Error("toggling two-player mode interrupted P1")
-	default:
+	if p1.strap != p1Before || retired(p1Before) {
+		t.Error("toggling two-player mode disturbed P1")
 	}
-	select {
-	case <-p2.switchCh:
-	default:
-		t.Error("toggling the mode did not wake P2 to drop its strap")
+	if p2.strap != nil {
+		t.Error("P2 is still subscribed after the mode went off")
 	}
 	if got := p2.effectiveMAC(); got != "" {
 		t.Errorf("P2 still following %q after the mode went off", got)
+	}
+	if !retired(dropped) {
+		t.Error("switching the mode off left P2's strap in the pool")
 	}
 }
 

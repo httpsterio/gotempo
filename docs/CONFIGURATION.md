@@ -46,6 +46,8 @@ directory on Windows. That is intended.
   "auto_log": false,
   "session_gap_minutes": 60,
   "min_bpm_threshold": 20,
+  "strap_hold_minutes": 20,
+  "strap_lost_minutes": 5,
   "itgmania_module": ""
 }
 ```
@@ -53,6 +55,8 @@ directory on Windows. That is intended.
 Set `current` to your device MAC and add a matching `known` entry. The app connects to it on next launch without scanning.
 
 `session_gap_minutes` (default 60) is the idle span that ends a CSV session: a longer gap between readings starts a new file, a shorter one continues the current session. `min_bpm_threshold` (default 20) is the validity floor; readings below it are treated as no-contact noise and left out of the CSV. Both keys are optional and only needed to override the defaults.
+
+`strap_hold_minutes` (default 20) and `strap_lost_minutes` (default 5) control how long a strap keeps its connection after nothing is following it any more, which only happens when a game profile hands the slot back. A connection is kept so that rejoining is instant instead of costing a reconnect. The first budget applies while the strap is still sending readings, so it is worn and the player is simply between songs; the second applies once it has gone quiet, which is what taking a belt off looks like about a minute later. Whichever runs out first releases the strap. A strap a slot is actually following is never released by either.
 
 ## Two straps
 

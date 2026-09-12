@@ -115,6 +115,30 @@ func TestParseConfigRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+// The retention budgets take the same whole-positive-minutes rule as the
+// session gap. Zero is invalid rather than "keep forever": a strap nobody ever
+// releases would hold a pool place for the life of the process.
+func TestParseConfigStrapBudgets(t *testing.T) {
+	cfg, _ := parseConfig([]byte(`{"strap_hold_minutes":45,"strap_lost_minutes":2}`))
+	if cfg.strapHold() != 45*time.Minute {
+		t.Errorf("hold = %v, want 45m", cfg.strapHold())
+	}
+	if cfg.strapLost() != 2*time.Minute {
+		t.Errorf("lost = %v, want 2m", cfg.strapLost())
+	}
+
+	bad, changed := parseConfig([]byte(`{"strap_hold_minutes":0,"strap_lost_minutes":-1}`))
+	if !changed {
+		t.Error("changed = false for out-of-range budgets")
+	}
+	if bad.strapHold() != defaultStrapHoldMinutes*time.Minute {
+		t.Errorf("zero hold kept: %v", bad.strapHold())
+	}
+	if bad.strapLost() != defaultStrapLostMinutes*time.Minute {
+		t.Errorf("negative lost kept: %v", bad.strapLost())
+	}
+}
+
 func TestParseConfigRejectsDecimalGap(t *testing.T) {
 	// session_gap_minutes is a whole number; a decimal is invalid.
 	cfg, changed := parseConfig([]byte(`{"session_gap_minutes":60.5}`))
@@ -128,7 +152,7 @@ func TestParseConfigRejectsDecimalGap(t *testing.T) {
 
 func TestParseConfigAcceptsValidValues(t *testing.T) {
 	// A complete, valid config (zero is a valid floor) round-trips unchanged.
-	data := `{"current":"AA","current_p2":"BB","two_player":true,"known":[],"auto_log":true,"session_gap_minutes":30,"min_bpm_threshold":0,"itgmania_module":""}`
+	data := `{"current":"AA","current_p2":"BB","two_player":true,"known":[],"auto_log":true,"session_gap_minutes":30,"min_bpm_threshold":0,"strap_hold_minutes":20,"strap_lost_minutes":5,"itgmania_module":""}`
 	cfg, changed := parseConfig([]byte(data))
 	if cfg == nil {
 		t.Fatal("parseConfig returned nil")

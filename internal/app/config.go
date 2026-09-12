@@ -106,6 +106,14 @@ type Config struct {
 	SessionGapMinutes int `json:"session_gap_minutes"` // gap that ends a CSV session
 	MinBPMThreshold   int `json:"min_bpm_threshold"`   // readings below this are junk
 
+	// The two retention budgets for a strap nobody is following any more. See
+	// strap.go: a released strap keeps its connection so rejoining is instant,
+	// and these bound how long. StrapHoldMinutes covers one still delivering
+	// readings (worn, just not in a song); StrapLostMinutes covers one that has
+	// gone quiet, whether it disconnected or is streaming zeros.
+	StrapHoldMinutes int `json:"strap_hold_minutes"`
+	StrapLostMinutes int `json:"strap_lost_minutes"`
+
 	// ITGmaniaModule is the path to the gotempo.lua theme module. hr.txt is
 	// written beside it, for the in-game heart-rate panel. Empty disables the
 	// overlay. There is no autodiscovery: the user sets this, by hand or with
@@ -119,6 +127,8 @@ type Config struct {
 const (
 	defaultSessionGapMinutes = 60
 	defaultMinBPMThreshold   = 20
+	defaultStrapHoldMinutes  = 20
+	defaultStrapLostMinutes  = 5
 )
 
 // defaultConfig is a complete config with every field at its default. First run
@@ -133,8 +143,29 @@ func defaultConfig() *Config {
 		AutoLog:           false,
 		SessionGapMinutes: defaultSessionGapMinutes,
 		MinBPMThreshold:   defaultMinBPMThreshold,
+		StrapHoldMinutes:  defaultStrapHoldMinutes,
+		StrapLostMinutes:  defaultStrapLostMinutes,
 		ITGmaniaModule:    "",
 	}
+}
+
+// strapHold and strapLost are the retention budgets as durations. A
+// non-positive value is invalid rather than "never expire": a strap that is
+// never released would hold a pool place for the life of the process.
+func (c Config) strapHold() time.Duration {
+	m := c.StrapHoldMinutes
+	if m <= 0 {
+		m = defaultStrapHoldMinutes
+	}
+	return time.Duration(m) * time.Minute
+}
+
+func (c Config) strapLost() time.Duration {
+	m := c.StrapLostMinutes
+	if m <= 0 {
+		m = defaultStrapLostMinutes
+	}
+	return time.Duration(m) * time.Minute
 }
 
 // sessionGap is the idle span that ends a session, as a duration.
@@ -164,6 +195,8 @@ func (c Config) clone() Config {
 		AutoLog:           c.AutoLog,
 		SessionGapMinutes: c.SessionGapMinutes,
 		MinBPMThreshold:   c.MinBPMThreshold,
+		StrapHoldMinutes:  c.StrapHoldMinutes,
+		StrapLostMinutes:  c.StrapLostMinutes,
 		ITGmaniaModule:    c.ITGmaniaModule,
 	}
 	out.Known = append([]KnownDevice(nil), c.Known...)
@@ -329,6 +362,24 @@ func parseConfig(data []byte) (*Config, bool) {
 		}
 	} else {
 		changed = true
+	}
+
+	// Both retention budgets: whole minutes, strictly positive, same rule as
+	// the session gap above.
+	for key, dst := range map[string]*int{
+		"strap_hold_minutes": &cfg.StrapHoldMinutes,
+		"strap_lost_minutes": &cfg.StrapLostMinutes,
+	} {
+		if v, ok := raw[key]; ok {
+			var n int
+			if json.Unmarshal(v, &n) == nil && n > 0 {
+				*dst = n
+			} else {
+				changed = true
+			}
+		} else {
+			changed = true
+		}
 	}
 
 	// Path to gotempo.lua, or empty for "no overlay". Not checked for existence

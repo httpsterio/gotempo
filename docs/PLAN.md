@@ -206,7 +206,78 @@ WantedBy=default.target
   since `--auto-log` + the existing gap-based session logic covers normal
   usage without manual start/stop.
 
+## ITGmania: publish players.txt from every screen
+
+The module publishes `players.txt` only from `ScreenSelectMusic`,
+`ScreenGameplay` and the evaluation screens, so on the menu screens the stamp
+goes stale and gotempo reads "the game is gone" when it is only on a screen the
+module does not publish from. The connection pool makes that harmless, since a
+release no longer costs a connection, which is why this is not urgent.
+
+Publishing from every screen the module attaches to would make the stamp mean
+"ITGmania is running" and the joined flags mean "who is standing there", which
+are different facts, and would make the tray and `--status` honest about it. It
+needs a matching rule in `applyProfiles`: a fresh file with nobody joined has to
+fall back to config, or `resolveSides` hands back two empty MACs and both slots
+go idle, which is worse than the stale path it replaces.
+
 ## Done
+
+- **Strap connection pool.** Connection lifetime is no longer tied to slot
+  assignment. `runBLE`/`connectLoop`/`connectAndMonitor` moved off `player` onto
+  a `strap` owned by `App` and keyed by MAC (`strap.go`); slots subscribe by
+  pointer, so a menu round trip, an ITGmania restart and a P1/P2 side swap all
+  cost no Bluetooth traffic at all. Previously every one of those signalled the
+  player's `switchCh`, which `connectAndMonitor` treats as unconditional
+  teardown, so an assignment change that left the effective MAC identical still
+  paid a full reconnect: ~30s of no readings, since the schedule is 5x3s then
+  5x10s and the first attempt lands while the belt is still tearing down the old
+  link. `player` keeps `state`, `session`, the ITG writer, the claim gate and
+  `handleBPM`; `switchCh` and `signalSwitch` are gone, and `errSwitched` became
+  `errRetired` because a strap has one address for life.
+  - Retention, swept on a ticker so the rules read in one place: cap 4 with LRU
+    eviction of unsubscribed straps (never a subscribed one), and two budgets,
+    `strap_hold_minutes` (20) from the moment the last subscriber left and
+    `strap_lost_minutes` (5) from the last usable reading, whichever fires
+    first. One `lastLive` field covers both ways of going quiet, since a dropped
+    link and a belt streaming zeros both stop advancing it; a belt taken off is
+    therefore gone about five minutes later rather than holding a pool place for
+    twenty. Nothing here keeps a belt awake: it sleeps about a minute after
+    coming off skin whatever we do, which is what makes link state a usable
+    proxy for "worn".
+  - An explicit act by the operator (picking a different device, switching
+    two-player mode off) retires the strap it replaces at once, via
+    `player.released`. The grace period is for implicit releases, where
+    ITGmania simply stopped naming it.
+  - Loss/reconnect notifications and the config `touch` are gated on
+    `player.driven`, so a visitor's strap neither raises toasts about someone
+    who has gone home nor lands in the cabinet's device list.
+  - CSV logging is skipped for a driven slot (one call site in `handleBPM`, so
+    the OBS write below it keeps working) and the slot's open session is closed
+    when the game takes it over.
+  - Tray: while any slot is driven, the logging toggle, auto-log, the
+    two-player checkbox and every device row grey out, with one inert banner
+    above them saying why. All four could previously be clicked to no effect,
+    and the two-player box could sit unchecked while a profile put a strap on
+    P2, because the driven path never consults `currentFor`. When
+    `itgmania_module` is set the OBS and CSV items are hidden rather than
+    greyed: grey says "not right now", and on a cabinet they are not part of
+    what the machine does.
+
+- **Straps follow the ITGmania profile.** A player names their own strap in
+  their game profile and gotempo follows it for as long as they are playing,
+  which is what makes a cabinet usable: picking a strap is otherwise a job
+  someone does at the PC. The module publishes `players.txt` beside
+  `gotempo.lua` once a second; gotempo polls it and drives `setAssignment` and
+  `setClaim` per slot (`itgprofile.go`). The file's first line is a local date
+  and seconds-since-midnight stamp, so a game that exits or crashes returns the
+  slots to config by going stale rather than by saying goodbye. `resolveSides`
+  resolves claims before configuration, and a side that named a strap gets that
+  strap or nothing even when the claim failed, since falling back would reopen
+  the wrong-person hole the gate exists to close. Module-side: files moved into
+  `Modules/gotempo/` (nested `.lua` modules do not load, but a module's data
+  files can live there), a heart-rate line drawn over the evaluation screen's
+  density graph, and a status heart per side on the menu screens.
 
 - **Two straps at once.** gotempo follows a second heart-rate strap, for a
   two-player ITGmania cabinet or for recording two people. Off by default and
@@ -236,8 +307,7 @@ WantedBy=default.target
     fallback to the cabinet's configured one, which would draw whoever is
     wearing that as the person playing. A claim change also breaks the CSV
     session, since the gap-based resume rule cannot tell a new person from the
-    same workout. Nothing sets a claim yet; `setClaim` is the entry point for
-    the ITGmania module work.
+    same workout. Claims are set by the profile follower below.
 
 - **CLI batch 2: device, auto-log, logging.** Completes the flag set on top of
   the autostart flags.

@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,7 +48,7 @@ var (
 // Sentinel errors flowing out of the connection loop.
 var (
 	errStopped        = errors.New("stopped")
-	errSwitched       = errors.New("switched")
+	errRetired        = errors.New("retired")
 	errSessionDropped = errors.New("session_dropped")
 )
 
@@ -101,6 +100,17 @@ type App struct {
 
 	scanMu sync.Mutex // serializes BLE scans (only one in flight at a time)
 
+	// straps is the connection pool, keyed by upper-case MAC, plus the slot
+	// pointers into it. One mutex covers both: every change is a swap between
+	// them, and splitting the two would let a slot point at a strap that has
+	// just been evicted. started gates launching connection goroutines, so a
+	// strap built before the workers start (the ITGmania profile follower runs
+	// one pass first, to avoid connecting the configured strap and dropping it
+	// a second later) waits for startWorkers instead of racing it.
+	strapMu sync.Mutex
+	straps  map[string]*strap
+	started bool
+
 	cfgMu sync.Mutex
 	cfg   *Config
 
@@ -108,15 +118,19 @@ type App struct {
 	stop      chan struct{}
 }
 
-// player is one strap: its connection loop, its live state, and its CSV log.
-// Each owns a private switchCh so that changing one strap's device does not
-// interrupt another's connection.
+// player is one slot: its live state, its CSV log, and a subscription to the
+// strap it is currently following. It does not own a connection. See strap.go
+// for why those are pooled instead.
 type player struct {
-	app      *App
-	slot     int // slotP1 or slotP2; picks this strap's config keys and file names
-	state    *AppState
-	session  *SessionLogger
-	switchCh chan struct{}
+	app     *App
+	slot    int // slotP1 or slotP2; picks this slot's config keys and file names
+	state   *AppState
+	session *SessionLogger
+
+	// strap is the belt this slot is listening to, nil when idle. Guarded by
+	// App.strapMu along with the pool itself, never by assignMu: this is the
+	// result of an assignment, not part of one.
+	strap *strap
 
 	// onReading, if set, is called for every reading this strap receives (before
 	// the logging gate and junk filter), used by --print-bpm. It is per-strap so
@@ -227,10 +241,9 @@ func newApp(cfg *Config) *App {
 
 func newPlayer(a *App, slot int, cfg *Config) *player {
 	p := &player{
-		app:      a,
-		slot:     slot,
-		state:    newAppState(outputPath(slot), cfg.AutoLog), // autostart logging if enabled
-		switchCh: make(chan struct{}, 1),
+		app:   a,
+		slot:  slot,
+		state: newAppState(outputPath(slot), cfg.AutoLog), // autostart logging if enabled
 	}
 	p.session = newSessionLogger(sessionsDir(), p.sessionSuffix, cfg.sessionGap(), cfg.minBPM(), cfg.AutoLog)
 	return p
@@ -267,13 +280,18 @@ func (p *player) sessionSuffix() string {
 func (p *player) setAssignment(driven bool, mac string) {
 	p.assignMu.Lock()
 	changed := p.driven != driven || p.override != mac
+	wasDriven := p.driven
 	p.driven, p.override = driven, mac
 	p.assignMu.Unlock()
 	if !changed {
 		return
 	}
+	// Taking the slot over ends the operator's CSV session rather than leaving
+	// a file open that nothing will write to again until the game lets go.
+	if driven && !wasDriven {
+		p.session.Close()
+	}
 	p.reassigned()
-	p.app.signalUI()
 }
 
 // effectiveMAC is the strap this slot should be following: the transient
@@ -334,6 +352,18 @@ func (p *player) isConnected() bool {
 	return connected
 }
 
+// anyDriven reports whether a game profile is currently choosing straps. While
+// it is, the tray's assignment controls cannot take effect, so they are greyed
+// rather than left looking clickable.
+func (a *App) anyDriven() bool {
+	for _, p := range a.players {
+		if p.isDriven() {
+			return true
+		}
+	}
+	return false
+}
+
 // anyConnected reports whether any strap is connected. The tray has one icon
 // for the whole app, so one live strap is enough to show as connected.
 func (a *App) anyConnected() bool {
@@ -361,8 +391,7 @@ func (a *App) setTwoPlayer(v bool) {
 		logErrf("config save: %v", err)
 	}
 
-	a.players[slotP2].reassigned()
-	a.signalUI()
+	a.players[slotP2].released()
 	logInfof("[BLE] two-player mode %s", onOff(v))
 }
 
@@ -393,23 +422,21 @@ func (a *App) assignSlots(macs [2]string, learned KnownDevice) {
 		if strings.EqualFold(old[slot], macs[slot]) {
 			continue
 		}
-		p.reassigned()
+		p.released()
 		logInfof("[BLE] P%d is now %s", slot+1, orNone(macs[slot]))
 	}
 	a.signalUI()
 }
 
-// reassigned drops whatever this strap was doing and wakes its loop to pick up
-// its new device, or to idle when it no longer has one.
-func (p *player) reassigned() {
-	p.state.onSwitch()
-	if p.effectiveMAC() == "" {
-		p.setPhase(phaseIdle)
-	} else {
-		p.setPhase(phaseConnecting)
-	}
-	p.signalSwitch()
-}
+// reassigned moves this slot onto whatever it should now be following. The
+// strap it leaves keeps its connection and ages out on the retention budgets,
+// which is what makes a menu round trip or a side swap free.
+func (p *player) reassigned() { p.app.resubscribe(p, false) }
+
+// released is reassigned for an explicit act by the operator: picking a
+// different device, or switching two-player mode off. That says "not that one",
+// so the strap being left goes at once rather than being kept warm.
+func (p *player) released() { p.app.resubscribe(p, true) }
 
 func onOff(v bool) string {
 	if v {
@@ -418,10 +445,26 @@ func onOff(v bool) string {
 	return "off"
 }
 
-// startWorkers launches one BLE connection loop per strap.
+// startWorkers brings the connection pool to life: any strap already built by a
+// pre-start assignment pass gets its goroutine, every slot is subscribed to
+// whatever it should be following, and the retention sweeper starts.
 func (a *App) startWorkers() {
+	a.strapMu.Lock()
+	a.started = true
+	for _, s := range a.straps {
+		go s.run()
+	}
+	a.strapMu.Unlock()
+
+	a.followAll()
+	go a.sweepLoop()
+}
+
+// followAll subscribes every slot to whatever it should be following. Safe to
+// call repeatedly: a slot already on the right strap is left untouched.
+func (a *App) followAll() {
 	for _, p := range a.players {
-		go p.runBLE()
+		a.resubscribe(p, false)
 	}
 }
 
@@ -584,11 +627,22 @@ func (a *App) signalUI() {
 	}
 }
 
-func (p *player) signalSwitch() {
-	select {
-	case p.switchCh <- struct{}{}:
-	default:
-	}
+// isDriven reports whether this slot's strap comes from outside the operator's
+// config (the ITGmania profile follower). It gates the things that belong to a
+// cabinet's own equipment rather than to a visitor: desktop notifications and
+// the config's device list.
+func (p *player) isDriven() bool {
+	p.assignMu.Lock()
+	defer p.assignMu.Unlock()
+	return p.driven
+}
+
+// adoptConnected brings this slot into a live session, whether it was here when
+// the strap connected or subscribed to one that was already up.
+func (p *player) adoptConnected(mac string) {
+	p.setConnMAC(mac)
+	p.state.onConnect()
+	p.setPhase(phaseConnected)
 }
 
 func (p *player) currentMAC() string {
@@ -619,25 +673,8 @@ func (p *player) switchTo(mac, name string) {
 		logErrf("config save: %v", err)
 	}
 
-	p.state.onSwitch()
-	p.setPhase(phaseConnecting) // new device; worker will reconnect
-	p.signalSwitch()
-	a.signalUI()
+	p.released()
 	logInfof("[BLE] switching to %s (%s)", name, mac)
-}
-
-// markConnected records the connection unless this slot is being driven from
-// outside. A visiting player's strap must not end up in the cabinet's config:
-// ITGmania never writes there, and the tray's device list would otherwise fill
-// with straps belonging to people who have gone home.
-func (p *player) markConnected(mac string) {
-	p.assignMu.Lock()
-	driven := p.driven
-	p.assignMu.Unlock()
-	if driven {
-		return
-	}
-	p.app.markConnected(mac)
 }
 
 // markConnected records a successful connection's timestamp and persists it.
@@ -687,8 +724,15 @@ func (p *player) handleBPM(bpm int) {
 
 	// CSV session log: every valid reading at full cadence (no dedup), so the
 	// file keeps a row per second. Junk is filtered inside LogReading.
-	if err := p.session.LogReading(now, bpm); err != nil {
-		logErrf("[CSV] %v", err)
+	//
+	// Not while a game profile is driving this slot. Those readings belong to
+	// whoever walked up to the cabinet, and a workout log per visitor is not
+	// what the folder is for; the game has its own record of the session. Only
+	// this call is skipped, so the OBS overlay below keeps working.
+	if !p.isDriven() {
+		if err := p.session.LogReading(now, bpm); err != nil {
+			logErrf("[CSV] %v", err)
+		}
 	}
 
 	// OBS overlay file: deduped to the last distinct value, with its own
@@ -767,301 +811,4 @@ func makeSchedule() []time.Duration {
 		}
 	}
 	return s
-}
-
-// runBLE is the top-level worker. It (re-)reads the current device on every
-// outer iteration so a switch simply causes the inner loop to return and the
-// new MAC to be picked up.
-func (p *player) runBLE() {
-	for {
-		select {
-		case <-p.app.stop:
-			return
-		default:
-		}
-
-		mac := p.effectiveMAC()
-		if mac == "" {
-			// No device chosen yet — idle until one is picked from the tray.
-			p.setPhase(phaseIdle)
-			select {
-			case <-p.app.stop:
-				return
-			case <-p.switchCh:
-				continue
-			}
-		}
-		parsed, err := bluetooth.ParseMAC(mac)
-		if err != nil {
-			logErrln("[BLE] invalid mac:", err)
-			select {
-			case <-p.app.stop:
-				return
-			case <-p.switchCh:
-				continue
-			}
-		}
-		addr := bluetooth.Address{MACAddress: bluetooth.MACAddress{MAC: parsed}}
-
-		if errors.Is(p.connectLoop(addr), errStopped) {
-			return
-		}
-		// errSwitched → fall through, re-read MAC.
-	}
-}
-
-// connectLoop runs the reconnection state machine for a single device address.
-// It retries silently through the finite schedule (5×3s, then 5×10s); a
-// reconnect during that phase is silent. When the finite schedule exhausts it
-// sends a single "device lost" notification and then retries connect-by-address
-// until the device reappears. A reconnect during that phase notifies
-// "reconnected" (via connectAndMonitor) and resets the schedule. It never gives
-// up; it returns only errStopped or errSwitched. No phase scans, so reconnection
-// never probes other devices in range.
-func (p *player) connectLoop(addr bluetooth.Address) error {
-	schedule := makeSchedule()
-	attempt := 0
-	notifiedLoss := false
-
-	for {
-		select {
-		case <-p.app.stop:
-			return errStopped
-		case <-p.switchCh:
-			return errSwitched
-		default:
-		}
-
-		if attempt < len(schedule) {
-			err := p.connectOnce(addr, notifiedLoss)
-			if errors.Is(err, errStopped) {
-				return errStopped
-			}
-			if errors.Is(err, errSwitched) {
-				return errSwitched
-			}
-
-			if errors.Is(err, errSessionDropped) {
-				// connectAndMonitor logs the session length on drop.
-				attempt = 0
-				notifiedLoss = false
-				p.state.onDisconnect()
-			} else {
-				logErrf("[BLE] connect failed: %s", describeConnectErr(err))
-				attempt++
-			}
-			p.app.signalUI()
-
-			if attempt < len(schedule) {
-				select {
-				case <-p.app.stop:
-					return errStopped
-				case <-p.switchCh:
-					return errSwitched
-				case <-time.After(schedule[attempt]):
-				}
-				continue
-			}
-			// Schedule exhausted; fall through to persistent phase.
-		}
-
-		// Persistent phase: scan continuously until the device reappears.
-		// persistentConnect only returns errStopped or errSwitched.
-		if !notifiedLoss {
-			notify("device lost")
-			notifiedLoss = true
-		}
-		return p.persistentConnect(addr, notifiedLoss)
-	}
-}
-
-// connectOnce connects directly to the device by address, with no scan. Used
-// during the finite schedule phase. A direct connect targets only the peer
-// address, so it never emits scan-request probes to other devices in range. It
-// returns errStopped, errSwitched, errSessionDropped, or a raw connect/discovery
-// error.
-func (p *player) connectOnce(addr bluetooth.Address, wasNotified bool) error {
-	p.setPhase(phaseConnecting)
-	adapter, err := p.app.ensureAdapter()
-	if err != nil {
-		return err
-	}
-	return p.connectAndMonitor(adapter, addr, wasNotified)
-}
-
-// persistentConnect retries a direct connect-by-address until the device comes
-// back, then monitors the session; on a drop it goes straight back to retrying.
-// It never scans, so it emits no scan-request probes to other devices while the
-// strap is away (the H10 is off most of the time it isn't worn). BlueZ must know
-// the device for connect-by-address to work; a bonded strap qualifies, and the
-// device is established by the user's tray pick / Rescan / --select-device, never
-// by a background scan. It returns errStopped or errSwitched only.
-func (p *player) persistentConnect(addr bluetooth.Address, wasNotified bool) error {
-	start := time.Now()
-	var lastLog time.Time // zero value forces a log on the first round
-	for {
-		select {
-		case <-p.app.stop:
-			return errStopped
-		case <-p.switchCh:
-			return errSwitched
-		default:
-		}
-
-		p.setPhase(phaseReconnecting)
-		if time.Since(lastLog) >= persistLogInterval {
-			logInfof("[BLE] reconnecting to %s (%s elapsed)", addr.MAC.String(), time.Since(start).Round(time.Second))
-			lastLog = time.Now()
-		}
-
-		adapter, err := p.app.ensureAdapter()
-		if err != nil {
-			logErrf("[BLE] %v", err)
-		} else if err = p.connectAndMonitor(adapter, addr, wasNotified); errors.Is(err, errStopped) || errors.Is(err, errSwitched) {
-			return err
-		} else if errors.Is(err, errSessionDropped) {
-			// connectAndMonitor logs the session length on drop; flip state and
-			// retry immediately so a brief blip reconnects fast.
-			p.state.onDisconnect()
-			p.app.signalUI()
-			wasNotified = false
-			start = time.Now()
-			lastLog = time.Time{}
-			continue
-		} else if err != nil {
-			// Expected while the strap is away (connect aborts/times out).
-			logErrf("[BLE] connect failed: %s", describeConnectErr(err))
-		}
-
-		select {
-		case <-p.app.stop:
-			return errStopped
-		case <-p.switchCh:
-			return errSwitched
-		case <-time.After(persistentRetryInterval):
-		}
-	}
-}
-
-// connectDevice attempts a direct connect-by-address and returns once connected,
-// failed, or the app stops/switches. adapter.Connect targets only the peer
-// address (no scan, no probes to other devices) but can block while BlueZ waits
-// on the connection attempt, so it runs in a goroutine and is abandoned on
-// stop/switch. An abandoned attempt that later connects is disconnected so it
-// does not hold the device's single BLE slot.
-func (p *player) connectDevice(adapter *bluetooth.Adapter, addr bluetooth.Address) (bluetooth.Device, error) {
-	type result struct {
-		dev bluetooth.Device
-		err error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		dev, err := adapter.Connect(addr, bluetooth.ConnectionParams{})
-		ch <- result{dev, err}
-	}()
-	abandon := func(sentinel error) (bluetooth.Device, error) {
-		go func() {
-			if r := <-ch; r.err == nil {
-				_ = r.dev.Disconnect()
-			}
-		}()
-		return bluetooth.Device{}, sentinel
-	}
-	select {
-	case <-p.app.stop:
-		return abandon(errStopped)
-	case <-p.switchCh:
-		return abandon(errSwitched)
-	case r := <-ch:
-		return r.dev, r.err
-	}
-}
-
-// connectAndMonitor connects to the device by address, discovers the HR service
-// and characteristic, enables notifications, and blocks until the session ends
-// or the app stops/switches. It always returns a sentinel error: errStopped,
-// errSwitched, errSessionDropped, or a raw connect/discovery error.
-func (p *player) connectAndMonitor(adapter *bluetooth.Adapter, addr bluetooth.Address, wasNotified bool) error {
-	logInfof("[BLE] connecting to %s…", addr.MAC.String())
-	device, err := p.connectDevice(adapter, addr)
-	if err != nil {
-		return err
-	}
-
-	services, err := device.DiscoverServices([]bluetooth.UUID{hrServiceUUID})
-	if err != nil {
-		_ = device.Disconnect()
-		return err
-	}
-	if len(services) == 0 {
-		_ = device.Disconnect()
-		return fmt.Errorf("HR service not found")
-	}
-
-	chars, err := services[0].DiscoverCharacteristics([]bluetooth.UUID{hrCharUUID})
-	if err != nil {
-		_ = device.Disconnect()
-		return err
-	}
-	if len(chars) == 0 {
-		_ = device.Disconnect()
-		return fmt.Errorf("HR characteristic not found")
-	}
-
-	if err := chars[0].EnableNotifications(func(buf []byte) {
-		if len(buf) < 2 {
-			return
-		}
-		flags := buf[0]
-		var bpm int
-		if flags&0x01 != 0 {
-			if len(buf) < 3 {
-				return
-			}
-			bpm = int(buf[1]) | int(buf[2])<<8
-		} else {
-			bpm = int(buf[1])
-		}
-		p.handleBPM(bpm)
-	}); err != nil {
-		_ = device.Disconnect()
-		return err
-	}
-
-	logInfoln("[BLE] connected")
-	connectedAt := time.Now()
-	p.setConnMAC(addr.MAC.String())
-	p.state.onConnect()
-	p.setPhase(phaseConnected)
-	p.markConnected(addr.MAC.String())
-	if wasNotified {
-		notify("reconnected")
-	}
-	p.app.signalUI()
-
-	cleanup := func() {
-		p.setConnMAC("")
-		_ = chars[0].EnableNotifications(nil)
-		_ = device.Disconnect()
-	}
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-p.app.stop:
-			cleanup()
-			return errStopped
-		case <-p.switchCh:
-			cleanup()
-			return errSwitched
-		case <-ticker.C:
-			connected, err := device.Connected()
-			if err != nil || !connected {
-				cleanup()
-				logInfof("[BLE] session ended after %s; reconnecting", time.Since(connectedAt).Round(time.Second))
-				return errSessionDropped
-			}
-		}
-	}
 }

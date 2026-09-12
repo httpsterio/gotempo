@@ -15,6 +15,7 @@ type tray struct {
 	app *App
 
 	mLog       *systray.MenuItem // single Start/Stop logging toggle
+	mDriven    *systray.MenuItem // inert banner, shown only while a profile drives a slot
 	mTwoPlayer *systray.MenuItem
 	mOpenLogs  *systray.MenuItem
 	mOpenConf  *systray.MenuItem
@@ -31,6 +32,12 @@ type tray struct {
 	scanDone    chan []KnownDevice
 	lastScanned []KnownDevice
 	scanning    bool
+
+	// cabinet is set when itgmania_module is configured. This install feeds a
+	// game rather than a stream or a workout log, so the OBS and CSV controls
+	// are hidden outright instead of greyed: greying says "not right now", and
+	// these are not part of what this machine does at all.
+	cabinet bool
 }
 
 // deviceEntry is one rendered row in the switch submenu.
@@ -166,10 +173,24 @@ func (t *tray) refresh() {
 		systray.SetIcon(imgConnected)
 	}
 
+	// While a game profile is choosing straps, the controls that would change
+	// that choice cannot take effect. Greying them is the honest report: the
+	// alternative is a menu that accepts clicks and silently ignores them.
+	driven := t.app.anyDriven()
+	if driven {
+		t.mDriven.Show()
+	} else {
+		t.mDriven.Hide()
+	}
+
 	// One toggle that reflects the current state: "Stop logging" while logging,
 	// otherwise "Start logging". Greyed out when there's no connection to log
-	// from (nothing to start or stop).
+	// from (nothing to start or stop), and while a profile drives a slot, since
+	// a driven strap's readings are not written to a CSV.
 	switch {
+	case driven:
+		t.mLog.SetTitle("Start logging")
+		t.mLog.Disable()
 	case connected && logging:
 		t.mLog.SetTitle("Stop logging")
 		t.mLog.Enable()
@@ -179,6 +200,25 @@ func (t *tray) refresh() {
 	default:
 		t.mLog.SetTitle("Start logging")
 		t.mLog.Disable()
+	}
+
+	if driven {
+		t.mAutoLog.Disable()
+		// The game owns sides while it drives: the driven path never consults
+		// currentFor, so this box can be unchecked while a profile puts a strap
+		// on P2. Leaving it clickable lets it go on saying otherwise.
+		t.mTwoPlayer.Disable()
+	} else {
+		t.mAutoLog.Enable()
+		t.mTwoPlayer.Enable()
+	}
+
+	if t.cabinet {
+		// Hidden every refresh rather than once at build time, since systray
+		// has no "stays hidden" state and a later Show elsewhere would undo it.
+		t.mLog.Hide()
+		t.mAutoLog.Hide()
+		t.mOpenLogs.Hide()
 	}
 
 	t.renderSwitch()
@@ -192,6 +232,7 @@ func (t *tray) refresh() {
 // count.
 func (t *tray) renderSwitch() {
 	cfg := t.app.snapshotConfig()
+	driven := t.app.anyDriven()
 	entries := buildEntries(cfg, t.lastScanned)
 	for i, s := range t.switchSlots {
 		if i < len(entries) {
@@ -203,7 +244,11 @@ func (t *tray) renderSwitch() {
 			// switch to what is already selected. With two, every row stays
 			// clickable: clicking an assigned strap is how it is cycled onward
 			// and eventually off.
-			if !cfg.TwoPlayer && assigned == slotP1 {
+			//
+			// None of them are while a profile is driving: a click would write
+			// config and then change nothing, because effectiveMAC keeps
+			// returning the override. The banner above says why.
+			if driven || (!cfg.TwoPlayer && assigned == slotP1) {
 				s.Disable()
 			} else {
 				s.Enable()
@@ -255,7 +300,7 @@ func (t *tray) loop(autoScan bool) {
 			// Same rule refresh() uses to enable this item, or with only P2
 			// connected it would look clickable and do nothing.
 			_, logging := t.app.p1().state.snapshot()
-			if t.app.anyConnected() {
+			if t.app.anyConnected() && !t.app.anyDriven() {
 				t.app.setLogging(!logging)
 			}
 			t.refresh()
@@ -265,6 +310,9 @@ func (t *tray) loop(autoScan bool) {
 			// Dir of configPath, not configDir, so --config points here too.
 			go openFolder(filepath.Dir(configPath()))
 		case <-t.mAutoLog.ClickedCh:
+			if t.app.anyDriven() {
+				break
+			}
 			// Only sets the launch preference; does not change current logging.
 			if t.mAutoLog.Checked() {
 				t.mAutoLog.Uncheck()
@@ -289,6 +337,9 @@ func (t *tray) loop(autoScan bool) {
 				}
 			}
 		case <-t.mTwoPlayer.ClickedCh:
+			if t.app.anyDriven() {
+				break
+			}
 			on := !t.mTwoPlayer.Checked()
 			if on {
 				t.mTwoPlayer.Check()
@@ -300,7 +351,7 @@ func (t *tray) loop(autoScan bool) {
 		case i := <-t.slotClicks:
 			mac := t.slotMACs[i]
 			name := t.slotNames[i]
-			if mac == "" {
+			if mac == "" || t.app.anyDriven() {
 				break
 			}
 			cfg := t.app.snapshotConfig()

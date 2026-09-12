@@ -308,7 +308,7 @@ func TestMarkConnectedSkipsDrivenSlots(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	p1.setAssignment(true, "CC:CC:CC:CC:CC:CC")
-	p1.markConnected("CC:CC:CC:CC:CC:CC")
+	p1.strap.markConnected()
 
 	for _, k := range a.snapshotConfig().Known {
 		if strings.EqualFold(k.MAC, "CC:CC:CC:CC:CC:CC") {
@@ -318,11 +318,11 @@ func TestMarkConnectedSkipsDrivenSlots(t *testing.T) {
 
 	// An operator-driven connection still is, which is how the tray list learns
 	// names and last-used times.
-	p1.setAssignment(false, "")
-	p1.markConnected("DD:DD:DD:DD:DD:DD")
+	p1.setAssignment(false, "") // back to the configured strap
+	p1.strap.markConnected()
 	found := false
 	for _, k := range a.snapshotConfig().Known {
-		if strings.EqualFold(k.MAC, "DD:DD:DD:DD:DD:DD") {
+		if strings.EqualFold(k.MAC, "AA:AA:AA:AA:AA:AA") {
 			found = true
 		}
 	}
