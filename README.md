@@ -18,7 +18,19 @@ Works with any BLE monitor using the standard GATT HR profile (0x180D / 0x2A37):
 
 Grab the latest build from [releases](https://github.com/httpsterio/gotempo/releases/latest) and extract it.
 
-On Linux, run `install.sh` to add gotempo to your applications menu, or just run `gotempo` directly. `uninstall.sh` removes it. Config and data live under `~/.config/gotempo` and `~/.local/share/gotempo`.
+On Linux:
+
+```sh
+tar -xzf gotempo-*-linux-amd64.tar.gz
+cd gotempo-*-linux-amd64
+./install.sh
+```
+
+That copies the binary to `~/.local/bin`, adds an icon, and puts gotempo in your applications menu. `uninstall.sh` removes it. You can also skip the installer and run `./gotempo` from the extracted folder.
+
+Run it from a terminal rather than double-clicking. The script prints where it installed to and reminds you to have `~/.local/bin` on your `PATH`, and most file managers either refuse to run shell scripts or run them with the output hidden. If you get "Permission denied", your archive tool dropped the executable bit: `chmod +x install.sh`, then try again.
+
+Config and data live under `~/.config/gotempo` and `~/.local/share/gotempo`.
 
 On Windows, extract the zip and run `gotempo.exe`. It holds everything in `%LOCALAPPDATA%\gotempo`. The zip also contains `gotempo-cli.exe`, the same app built as a console binary, for the flags in [Command line](docs/CLI.md).
 

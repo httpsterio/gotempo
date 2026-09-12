@@ -83,6 +83,15 @@ release:
 		{ echo "VERSION must look like v1.2.3 (got '$(VERSION)')"; exit 1; }
 	@git diff --quiet || { echo "working tree is dirty; commit or stash first"; exit 1; }
 	go test ./...
+	@# Refuse before the tag exists rather than after. A tag pushed on a commit
+	@# the branch has not reached leaves GitHub with no workflow on the default
+	@# branch, so the release build never runs, and undoing it means deleting a
+	@# tag that is already public.
+	@git fetch --quiet origin
+	@test -z "$$(git log @{u}..HEAD --oneline 2>/dev/null)" || \
+		{ echo "HEAD is ahead of its upstream; push the branch first"; exit 1; }
 	git tag -a "$(VERSION)" -m "gotempo $(VERSION)"
-	git push origin "$(VERSION)"
+	@# HEAD as well as the tag, for a branch with no upstream set, where the
+	@# check above cannot tell whether the commit is on the remote.
+	git push origin HEAD "$(VERSION)"
 	@echo "Pushed tag $(VERSION). GitHub Actions will build and publish the release."
