@@ -116,6 +116,13 @@ Two players may name the same strap. That is a choice rather than a mistake -- t
 
 The assignment is never written to `config.json`. It lives in memory, so quitting gotempo, or ITGmania exiting or crashing, returns every slot to whatever the tray is set to. That also means a visiting player's strap never joins the machine's device list.
 
+Two more things stop while a profile is driving a slot, for the same reason:
+
+- **No CSV session file.** Those readings belong to whoever walked up to the cabinet, and a workout log per visitor is not what the folder is for. The game keeps its own record of the session. `gotempo-bpm.txt` is unaffected and still updates.
+- **No loss or reconnect notifications**, so the desktop is not filled with news about people who have left.
+
+The tray reflects it too: an **ITGmania is choosing straps** line appears above the device list, and the logging toggle, **Autostart HR log**, **Two-player mode** and every device row grey out. All four would write to `config.json` and then change nothing, because the profile keeps overriding it.
+
 `players.txt` carries the module's own clock, and gotempo releases the straps when that stamp stops advancing. This is what covers the game being killed rather than closed.
 
 The in-game picker rides the same file: it adds a `scan <token>` line, and gotempo answers by scanning and writing `devices.txt` beside `hr.txt`. That list is blanked about a minute later, and again when gotempo starts, so a folder full of other people's straps does not sit there for the rest of the day.
@@ -124,7 +131,7 @@ The in-game picker rides the same file: it adds a `scan <token>` line, and gotem
 
 gotempo can drive `gotempo.lua`, a Simply Love theme module that draws your heart rate on ITGmania's gameplay screen. The module is installed separately; gotempo's side is one config key.
 
-Set `itgmania_module` to the full path of `gotempo.lua`, and gotempo writes `hr.txt` next to it:
+The module is [gotempo-sl-module](https://github.com/httpsterio/gotempo-sl-module). Set `itgmania_module` to the full path of its `gotempo.lua`, and gotempo writes `hr.txt` next to it:
 
 ```json
 "itgmania_module": "/home/you/.itgmania/Themes/Simply Love/Modules/gotempo.lua"

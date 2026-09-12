@@ -77,6 +77,8 @@ Most straps allow one connection at a time, so disconnect the monitor from your 
 | **Start on boot** | Adds or removes `~/.config/autostart/gotempo.desktop`. |
 | **Quit** | Exits the app. |
 
+While a player's ITGmania profile is choosing straps, an **ITGmania is choosing straps** line appears above the device list and the controls the game has taken over grey out: the logging toggle, **Autostart HR log**, **Two-player mode**, and every device row. Clicking them would write to `config.json` and then change nothing, because the profile keeps overriding it. They come back as soon as the game lets go.
+
 
 ## Command line
 
@@ -105,7 +107,7 @@ Pair the strap to the machine once first. The assignment is never written to `co
 
 ## ITGmania overlay
 
-gotempo can drive `gotempo.lua`, a Simply Love theme module that draws your heart rate on ITGmania's gameplay screen. Install the module, then set one key in `config.json` to its full path:
+gotempo can drive [gotempo-sl-module](https://github.com/httpsterio/gotempo-sl-module), a Simply Love theme module that draws your heart rate on ITGmania's gameplay screen and over the density graph on the evaluation screen. Install the module, then set one key in `config.json` to its full path:
 
 ```json
 "itgmania_module": "/home/you/.itgmania/Themes/Simply Love/Modules/gotempo.lua"
@@ -115,6 +117,8 @@ Restart gotempo. It writes `hr.txt` beside the module, and the panel appears in 
 
 `gotempo --itgmania-module <path>` sets the same key. See [ITGmania overlay](docs/CONFIGURATION.md#itgmania-overlay) for the file format and where the module lives on each OS.
 
+With that key set, gotempo treats the machine as a cabinet: the OBS and CSV items disappear from the tray, since neither is what this install is for. The rest of the menu is unchanged.
+
 
 ## Reconnection behaviour
 
@@ -122,6 +126,8 @@ When the connection drops, gotempo reconnects on its own:
 
 - It retries silently for a short while. A device that returns in this window reconnects with no notification.
 - If that fails, it sends one "device lost" notification and keeps retrying until the device returns, then sends "reconnected".
+
+Those notifications are only for straps you configured. A strap that arrived from a player's ITGmania profile stays silent, or a cabinet would spend the evening reporting on people who have gone home.
 
 Reconnection connects straight to your device by address, it does not scan, so it never probes other Bluetooth devices in range while waiting for your strap to come back. Scanning happens only when you pick a device or hit Rescan. Connecting by address needs the device to be known to BlueZ already, which it is once you have paired or connected it once.
 
