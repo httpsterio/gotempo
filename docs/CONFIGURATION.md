@@ -97,6 +97,11 @@ Add `gotempo.ini` to the profile directory (alongside the `GrooveStats.ini` and 
 Device=24:AC:AC:18:41:CC
 ```
 
+You do not have to write that by hand. With the module installed, the player picks their
+strap in game: **sort menu → Advanced → gotempo**, which lists the straps in range and
+writes the choice into their own profile. `gotempo --list-devices` still prints MAC and
+name if you would rather set it up from a terminal.
+
 Nothing else is needed. The module publishes `players.txt` in its own folder beside `gotempo.lua` once a second while the game is on a song-select, gameplay or evaluation screen; gotempo reads it and moves the straps. The strap must be paired to the machine once beforehand, the same as any strap gotempo connects to.
 
 | The player | gotempo follows |
@@ -107,9 +112,13 @@ Nothing else is needed. The module publishes `players.txt` in its own folder bes
 
 A player who named a strap gets that strap or nothing. gotempo will not fall back to the machine's configured strap for them, because that strap is on somebody else and drawing its readings as theirs would be wrong in a way nobody would notice.
 
+Two players may name the same strap. That is a choice rather than a mistake -- they are swapping sides, or one has stopped playing and lent the belt out -- so gotempo connects it once and feeds both sides from the one connection. What it still refuses is handing one *configured* strap to two slots nobody asked for.
+
 The assignment is never written to `config.json`. It lives in memory, so quitting gotempo, or ITGmania exiting or crashing, returns every slot to whatever the tray is set to. That also means a visiting player's strap never joins the machine's device list.
 
 `players.txt` carries the module's own clock, and gotempo releases the straps when that stamp stops advancing. This is what covers the game being killed rather than closed.
+
+The in-game picker rides the same file: it adds a `scan <token>` line, and gotempo answers by scanning and writing `devices.txt` beside `hr.txt`. That list is blanked about a minute later, and again when gotempo starts, so a folder full of other people's straps does not sit there for the rest of the day.
 
 ## ITGmania overlay
 

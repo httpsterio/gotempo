@@ -206,22 +206,41 @@ WantedBy=default.target
   since `--auto-log` + the existing gap-based session logic covers normal
   usage without manual start/stop.
 
-## ITGmania: publish players.txt from every screen
-
-The module publishes `players.txt` only from `ScreenSelectMusic`,
-`ScreenGameplay` and the evaluation screens, so on the menu screens the stamp
-goes stale and gotempo reads "the game is gone" when it is only on a screen the
-module does not publish from. The connection pool makes that harmless, since a
-release no longer costs a connection, which is why this is not urgent.
-
-Publishing from every screen the module attaches to would make the stamp mean
-"ITGmania is running" and the joined flags mean "who is standing there", which
-are different facts, and would make the tray and `--status` honest about it. It
-needs a matching rule in `applyProfiles`: a fresh file with nobody joined has to
-fall back to config, or `resolveSides` hands back two empty MACs and both slots
-go idle, which is worse than the stale path it replaces.
-
 ## Done
+
+- **In-game strap picker.** A player picks their strap from the sort menu
+  (Advanced -> gotempo) and it is written into their own profile, so finding a
+  MAC no longer means a terminal. `--list-devices` stays as the fallback.
+  - The module cannot scan, having no Bluetooth, so it asks: a `scan <token>`
+    line in `players.txt`, which inherits that file's stamp rather than needing
+    a channel of its own. gotempo serves a token it has not served before, so
+    the line can sit there while the picker is open and a retry is just a new
+    token. `parsePlayers` already skipped unknown labels, so older builds ignore
+    it.
+  - gotempo answers with `devices.txt` beside `hr.txt`: the union of the scan,
+    `cfg.Known`, and **every strap in the pool**. The last is load-bearing, since
+    a connected strap is not advertising and so cannot appear in a scan -- and
+    one player picking the strap another is already wearing is a wanted case.
+  - The list is blanked ~60s after publishing and again at startup. It names
+    straps belonging to whoever was in the room, and expiry rides the profile
+    poll rather than a timer, so there is one beat and no stale timer able to
+    blank a newer list.
+  - `resolveSides` no longer refuses two sides claiming one strap. Naming the
+    same belt by hand is deliberate; the `taken()` check stays on the config
+    fallback, which is where handing one strap to two slots is the wrong-person
+    bug rather than a choice.
+  - Module side: the sort menu entry goes through `custom_functions` /
+    `wheel_options`, a supported extension point present in stock Simply Love,
+    so no theme file is edited. The picker draws its own overlay and swallows
+    input while up. Which side a pick is written to comes from who is joined
+    first and only then from who pressed, because a lone P2 is a real case and a
+    keyboard press arriving as P1 must not write into the wrong profile. A side
+    with no profile loaded is never offered one.
+  - Rows are ordered unassigned first, then straps some profile already claims,
+    with their owners' display names shown. At a venue with three cabs in one
+    room a scan turns up a dozen straps, and without owner names they are an
+    undifferentiated column of hex.
+
 
 - **Strap connection pool.** Connection lifetime is no longer tied to slot
   assignment. `runBLE`/`connectLoop`/`connectAndMonitor` moved off `player` onto

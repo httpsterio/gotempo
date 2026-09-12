@@ -87,6 +87,14 @@ func itgHRPathFor(module string, slot int) string {
 	return filepath.Join(itgDir(module), itgHRBase+slotSuffix(slot)+".txt")
 }
 
+// devicesFile is the strap list the in-game picker reads, published on request
+// and blanked again shortly after. See publishDevices.
+const devicesFile = "devices.txt"
+
+func devicesPathFor(module string) string {
+	return filepath.Join(itgDir(module), devicesFile)
+}
+
 // setupITG validates the configured module path once, at startup, and returns
 // the writer for the run. An empty path means the feature is off. A path that
 // isn't there disables it and says so: writing into a dead path would leave the

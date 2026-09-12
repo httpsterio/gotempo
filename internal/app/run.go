@@ -182,12 +182,11 @@ func cmdRun(opts cliOptions) int {
 	// when the overlay is configured, so a desktop user never polls for a file
 	// that will not exist.
 	if module := app.snapshotConfig().ITGmaniaModule; module != "" {
-		path := playersPathFor(module)
 		// Once synchronously before the workers start, so a cabinet does not
 		// connect the configured strap only to drop it a second later when the
 		// first poll says somebody else's profile is driving.
-		app.applyProfiles(path)
-		go app.followProfiles(path)
+		app.applyProfiles(module)
+		go app.followProfiles(module)
 	}
 
 	// Apply the session-only logging override (config value, with headless

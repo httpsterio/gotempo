@@ -169,16 +169,18 @@ func TestResolveSides(t *testing.T) {
 			wantClaims: [2]string{"", houseP1},
 		},
 		{
-			// Two people cannot wear one strap. Deterministic rather than correct,
-			// since the input is already a misconfiguration.
-			name: "the same strap claimed twice goes to one slot only",
+			// Two people naming one strap is a choice, not a misconfiguration:
+			// they are swapping sides, or one has stopped playing and lent the
+			// belt out. The pool connects it once and feeds both slots, and both
+			// gates open because both claims match the strap that is connected.
+			name: "the same strap claimed twice goes to both slots",
 			cfg:  twoStraps,
 			sides: itgSides{
 				joined: [2]bool{true, true},
 				claim:  [2]string{mine, mine},
 			},
-			wantMACs:   [2]string{mine, ""},
-			wantClaims: [2]string{mine, ""},
+			wantMACs:   [2]string{mine, mine},
+			wantClaims: [2]string{mine, mine},
 		},
 		{
 			name:     "both joined, neither claiming, only one strap configured",
@@ -204,8 +206,7 @@ func TestResolveSides(t *testing.T) {
 // The end-to-end poll: a file on disk moves the straps, and losing the file
 // hands them back.
 func TestApplyProfiles(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, playersFile)
+	module, path := itgChannel(t)
 	a, p1, p2 := twoPlayerApp(t)
 
 	write := func(body string) {
@@ -217,7 +218,7 @@ func TestApplyProfiles(t *testing.T) {
 
 	// A claim on P1 takes over; P2 keeps its configured strap.
 	write("p1 CC:CC:CC:CC:CC:CC\np2 -\n")
-	a.applyProfiles(path)
+	a.applyProfiles(module)
 	if got := p1.effectiveMAC(); got != "CC:CC:CC:CC:CC:CC" {
 		t.Errorf("P1 = %q, want the claimed strap", got)
 	}
@@ -228,7 +229,7 @@ func TestApplyProfiles(t *testing.T) {
 	// The player moves to the other side. The strap must follow, and must not be
 	// left behind on the slot they vacated.
 	write("p2 CC:CC:CC:CC:CC:CC\n")
-	a.applyProfiles(path)
+	a.applyProfiles(module)
 	if got := p1.effectiveMAC(); got != "" {
 		t.Errorf("after moving to P2, P1 = %q, want idle", got)
 	}
@@ -240,7 +241,7 @@ func TestApplyProfiles(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	a.applyProfiles(path)
+	a.applyProfiles(module)
 	if got := p1.effectiveMAC(); got != "AA:AA:AA:AA:AA:AA" {
 		t.Errorf("after the file went away, P1 = %q, want config", got)
 	}
@@ -252,14 +253,13 @@ func TestApplyProfiles(t *testing.T) {
 // A stale file is as good as no file: ITGmania cannot say goodbye when it
 // crashes, so a stamp that stops advancing is what releases the straps.
 func TestApplyProfilesReleasesOnStaleFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, playersFile)
+	module, path := itgChannel(t)
 	a, p1, _ := twoPlayerApp(t)
 
 	if err := os.WriteFile(path, stampedNow(0, "p1 CC:CC:CC:CC:CC:CC\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	a.applyProfiles(path)
+	a.applyProfiles(module)
 	if got := p1.effectiveMAC(); got != "CC:CC:CC:CC:CC:CC" {
 		t.Fatalf("P1 = %q, want the claimed strap", got)
 	}
@@ -267,7 +267,7 @@ func TestApplyProfilesReleasesOnStaleFile(t *testing.T) {
 	if err := os.WriteFile(path, stampedNow(3600, "p1 CC:CC:CC:CC:CC:CC\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	a.applyProfiles(path)
+	a.applyProfiles(module)
 	if got := p1.effectiveMAC(); got != "AA:AA:AA:AA:AA:AA" {
 		t.Errorf("P1 = %q, want config after the stamp went stale", got)
 	}
@@ -331,6 +331,20 @@ func TestMarkConnectedSkipsDrivenSlots(t *testing.T) {
 	}
 }
 
+// itgChannel builds a throwaway module and its data folder, and returns the
+// module path callers pass to applyProfiles alongside the players.txt they
+// write. Both are derived the way the running app derives them, so a change to
+// the layout cannot leave a test writing where nothing reads.
+func itgChannel(t *testing.T) (module, players string) {
+	t.Helper()
+	dir := t.TempDir()
+	module = writeModule(t, dir)
+	if err := os.MkdirAll(itgDir(module), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return module, playersPathFor(module)
+}
+
 func TestPlayersPathFor(t *testing.T) {
 	module := filepath.Join("/themes", "Simply Love", "Modules", "gotempo.lua")
 	want := filepath.Join(filepath.Dir(module), "gotempo", "players.txt")
@@ -379,5 +393,149 @@ func TestParsesWhatTheModuleWrites(t *testing.T) {
 				t.Errorf("claim = %v, want %v", sides.claim, c.claim)
 			}
 		})
+	}
+}
+
+// ── the strap picker's channel ───────────────────────────────────────────────
+
+// The scan request rides in players.txt so it inherits that file's stamp. An
+// unknown label must not cost the sides around it, which is what lets an older
+// gotempo ignore the line instead of choking on it.
+func TestParsePlayersReadsScanRequest(t *testing.T) {
+	sides, ok := parsePlayers(stamped(0, "p1 24:AC:AC:18:41:CC\nscan 52327\np2 -\n"), refNow)
+	if !ok {
+		t.Fatal("a file carrying a scan line was rejected")
+	}
+	if sides.scan != 52327 {
+		t.Errorf("scan = %d, want 52327", sides.scan)
+	}
+	if !sides.joined[slotP1] || sides.claim[slotP1] != "24:AC:AC:18:41:CC" {
+		t.Error("the scan line ate P1")
+	}
+	if !sides.joined[slotP2] {
+		t.Error("the scan line ate P2")
+	}
+
+	// No request is the normal state, and must be distinguishable from one.
+	quiet, _ := parsePlayers(stamped(0, "p1 -\n"), refNow)
+	if quiet.scan != 0 {
+		t.Errorf("scan = %d with no request, want 0", quiet.scan)
+	}
+
+	// A malformed token is not a request. It reaches here from a file gotempo
+	// does not write.
+	junk, _ := parsePlayers(stamped(0, "scan soon\n"), refNow)
+	if junk.scan != 0 {
+		t.Errorf("scan = %d for a non-numeric token, want 0", junk.scan)
+	}
+}
+
+// The list the picker reads. Its contents are the point: a scan alone cannot
+// see a connected strap, so one player could never pick the strap another is
+// already wearing.
+func TestPublishDevices(t *testing.T) {
+	module, _ := itgChannel(t)
+	a, p1, _ := twoPlayerApp(t)
+
+	// A strap in the pool, which is what a connected belt looks like.
+	p1.setAssignment(true, "CC:CC:CC:CC:CC:CC")
+
+	a.publishDevices(module, []KnownDevice{{MAC: "11:22:33:44:55:66", Name: "Polar H10 0F22B1C4"}})
+
+	data, err := os.ReadFile(devicesPathFor(module))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("devices.txt = %q, want a stamp and at least one strap", data)
+	}
+
+	var date, secs int
+	if n, err := fmt.Sscanf(lines[0], "%d %d", &date, &secs); n != 2 || err != nil {
+		t.Errorf("first line is not a stamp: %q", lines[0])
+	}
+	if date != dateStamp(time.Now()) {
+		t.Errorf("stamp date = %d, want today", date)
+	}
+
+	body := strings.Join(lines[1:], "\n")
+	for _, want := range []string{
+		"11:22:33:44:55:66\tPolar H10 0F22B1C4", // scanned
+		"AA:AA:AA:AA:AA:AA",                     // configured
+		"CC:CC:CC:CC:CC:CC",                     // pooled, and so not advertising
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("devices.txt is missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// One belt is one entry however its MAC is spelled, or the picker would offer
+// the same strap twice and the two rows would disagree about who owns it.
+func TestPublishDevicesDedupes(t *testing.T) {
+	module, _ := itgChannel(t)
+	a, _, _ := twoPlayerApp(t)
+
+	a.publishDevices(module, []KnownDevice{
+		{MAC: "11:22:33:44:55:66", Name: "Polar H10"},
+		{MAC: "11:22:33:44:55:66", Name: "Polar H10"},
+		{MAC: "aa:aa:aa:aa:aa:aa", Name: "lowercase"},
+	})
+
+	data, _ := os.ReadFile(devicesPathFor(module))
+	if got := strings.Count(string(data), "11:22:33:44:55:66"); got != 1 {
+		t.Errorf("a repeated MAC appears %d times, want 1", got)
+	}
+	if got := strings.Count(strings.ToUpper(string(data)), "AA:AA:AA:AA:AA:AA"); got != 1 {
+		t.Errorf("one belt spelled two ways appears %d times, want 1", got)
+	}
+}
+
+// The list names straps belonging to whoever was in the room. It has no
+// business outliving the person reading it.
+func TestDevicesExpire(t *testing.T) {
+	module, _ := itgChannel(t)
+	a, _, _ := twoPlayerApp(t)
+
+	a.publishDevices(module, []KnownDevice{{MAC: "11:22:33:44:55:66", Name: "Polar"}})
+	path := devicesPathFor(module)
+
+	// Inside its window it stays readable, or the picker would blank mid-pick.
+	a.expireDevices(module, time.Now())
+	if data, _ := os.ReadFile(path); len(data) == 0 {
+		t.Fatal("the list was cleared while still current")
+	}
+
+	a.expireDevices(module, time.Now().Add(devicesTTL+time.Second))
+	if data, _ := os.ReadFile(path); len(data) != 0 {
+		t.Errorf("an expired list still holds %q", data)
+	}
+
+	// Empty, not absent: the module reads an empty file as "nothing here", the
+	// same way it reads an empty hr.txt.
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("devices.txt was removed rather than blanked: %v", err)
+	}
+}
+
+// The picker leaves its line in place for as long as it is open, so a token
+// already served must not start another scan every second. A retry is a new
+// token.
+func TestServeScanIgnoresARepeatedToken(t *testing.T) {
+	a, _, _ := twoPlayerApp(t)
+
+	if !a.claimScanToken(52327) {
+		t.Error("the first request was not served")
+	}
+	// Finish it first, or "busy" would reject the repeat and the token rule
+	// would never be exercised.
+	a.finishScan()
+	if a.claimScanToken(52327) {
+		t.Error("the same token was served twice")
+	}
+
+	if !a.claimScanToken(52400) {
+		t.Error("a retry with a new token was not served")
 	}
 }

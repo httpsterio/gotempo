@@ -111,6 +111,14 @@ type App struct {
 	straps  map[string]*strap
 	started bool
 
+	// The in-game strap picker's handshake, and the published list's lifetime.
+	// See itgprofile.go: the module asks for a scan by writing a token, and the
+	// answer it reads back is deliberately short-lived.
+	scanReqMu    sync.Mutex
+	scanBusy     bool
+	scanToken    int
+	devicesUntil time.Time
+
 	cfgMu sync.Mutex
 	cfg   *Config
 
@@ -350,6 +358,19 @@ func (a *App) anyDeviceConfigured() bool {
 func (p *player) isConnected() bool {
 	connected, _ := p.state.snapshot()
 	return connected
+}
+
+// pooledMACs is every strap gotempo currently holds, connected or retrying.
+// The picker needs these because a connected strap stops advertising and so
+// cannot turn up in a scan.
+func (a *App) pooledMACs() []string {
+	a.strapMu.Lock()
+	defer a.strapMu.Unlock()
+	out := make([]string, 0, len(a.straps))
+	for _, s := range a.straps {
+		out = append(out, s.mac)
+	}
+	return out
 }
 
 // anyDriven reports whether a game profile is currently choosing straps. While
