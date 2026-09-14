@@ -102,7 +102,7 @@ strap in game: **sort menu → Advanced → gotempo**, which lists the straps in
 writes the choice into their own profile. `gotempo --list-devices` still prints MAC and
 name if you would rather set it up from a terminal.
 
-Nothing else is needed. The module publishes `players.txt` in its own folder beside `gotempo.lua` once a second while the game is on a song-select, gameplay or evaluation screen; gotempo reads it and moves the straps. The strap must be paired to the machine once beforehand, the same as any strap gotempo connects to.
+Nothing else is needed. The module publishes `players.txt` in its own folder beside `gotempo.lua`: once a second on the song wheel, and every three seconds during a song and on the results screen. gotempo reads it and moves the straps. The strap must be paired to the machine once beforehand, the same as any strap gotempo connects to.
 
 | The player | gotempo follows |
 |---|---|
