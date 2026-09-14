@@ -273,8 +273,32 @@ func (a *App) serveScan(module string, token int) {
 	go func() {
 		defer a.finishScan()
 		logInfof("[ITG] strap picker asked for a scan")
+		a.acknowledgeScan(module)
 		a.publishDevices(module, a.scanDevices(scanDuration))
 	}()
+}
+
+// acknowledgeScan tells the picker its request arrived, before the scan starts.
+//
+// Without it the picker hears nothing until the scan finishes, so it cannot tell
+// a gotempo that is fifteen seconds into a scan from one that is not running, and
+// a slow adapter used to be reported as the second. The marker rides on the stamp
+// line rather than on a line of its own: a 2.0.0 module accepts only a two-number
+// stamp, so it ignores this file entirely instead of listing "scanning" as a
+// strap.
+func (a *App) acknowledgeScan(module string) {
+	// A list published less than devicesTTL ago would otherwise be blanked by
+	// the expiry mid-scan, taking this acknowledgement with it.
+	a.scanReqMu.Lock()
+	a.devicesUntil = time.Time{}
+	a.scanReqMu.Unlock()
+
+	now := time.Now()
+	line := fmt.Sprintf("%08d %d scanning\n", dateStamp(now), secondsOfDay(now))
+	path := devicesPathFor(module)
+	if err := os.WriteFile(path, []byte(line), 0644); err != nil {
+		logErrf("[ITG] could not write %s: %v", path, err)
+	}
 }
 
 // claimScanToken reserves the radio for one request, and is the whole of the

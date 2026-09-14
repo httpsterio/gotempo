@@ -539,3 +539,46 @@ func TestServeScanIgnoresARepeatedToken(t *testing.T) {
 		t.Error("a retry with a new token was not served")
 	}
 }
+
+// The picker needs to hear that a scan started, or a slow scan reads as gotempo
+// not running. The marker is on the stamp line so a 2.0.0 module, which accepts
+// only a two-number stamp, ignores the file rather than listing it as a strap.
+func TestAcknowledgeScan(t *testing.T) {
+	module, _ := itgChannel(t)
+	a, _, _ := twoPlayerApp(t)
+
+	a.acknowledgeScan(module)
+
+	data, err := os.ReadFile(devicesPathFor(module))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var date, secs int
+	var word string
+	line := strings.TrimSpace(string(data))
+	if n, err := fmt.Sscanf(line, "%d %d %s", &date, &secs, &word); n != 3 || err != nil {
+		t.Fatalf("acknowledgement = %q, want a stamp followed by a marker", data)
+	}
+	if date != dateStamp(time.Now()) || word != "scanning" {
+		t.Errorf("acknowledgement = %q", data)
+	}
+	if strings.Contains(line, "\n") {
+		t.Errorf("acknowledgement has more than one line: %q", data)
+	}
+}
+
+// A list published moments before a rescan must not expire mid-scan and take
+// the acknowledgement with it.
+func TestAcknowledgeScanSurvivesExpiry(t *testing.T) {
+	module, _ := itgChannel(t)
+	a, _, _ := twoPlayerApp(t)
+
+	a.publishDevices(module, []KnownDevice{{MAC: "11:22:33:44:55:66", Name: "Polar"}})
+	a.acknowledgeScan(module)
+	a.expireDevices(module, time.Now().Add(devicesTTL+time.Second))
+
+	data, _ := os.ReadFile(devicesPathFor(module))
+	if !strings.Contains(string(data), "scanning") {
+		t.Errorf("the acknowledgement was blanked by an earlier list's expiry: %q", data)
+	}
+}

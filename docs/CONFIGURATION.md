@@ -125,7 +125,7 @@ The tray reflects it too: an **ITGmania is choosing straps** line appears above 
 
 `players.txt` carries the module's own clock, and gotempo releases the straps when that stamp stops advancing. This is what covers the game being killed rather than closed.
 
-The in-game picker rides the same file: it adds a `scan <token>` line, and gotempo answers by scanning and writing `devices.txt` beside `hr.txt`. That list is blanked about a minute later, and again when gotempo starts, so a folder full of other people's straps does not sit there for the rest of the day.
+The in-game picker rides the same file: it adds a `scan <token>` line, and gotempo answers by scanning and writing `devices.txt` beside `hr.txt`. Before scanning it writes the file once with only its stamp, marked `scanning`, so the picker can tell a scan in progress from gotempo not running. That list is blanked about a minute later, and again when gotempo starts, so a folder full of other people's straps does not sit there for the rest of the day.
 
 ## ITGmania overlay
 
