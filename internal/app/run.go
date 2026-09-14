@@ -198,8 +198,8 @@ func cmdRun(opts cliOptions) int {
 
 	// Publish a fresh status for this run before the BLE worker starts, so a
 	// --status racing startup can't read a previous run's leftover status.json
-	// (the lock is already held, so the instance counts as live). runBLE advances
-	// the phase from here.
+	// (the lock is already held, so the instance counts as live). Each strap's
+	// connection loop advances the phase from here.
 	for _, p := range app.players {
 		p.state.setPhase(phaseIdle)
 	}

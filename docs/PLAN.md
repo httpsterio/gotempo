@@ -232,10 +232,10 @@ WantedBy=default.target
   - Module side: the sort menu entry goes through `custom_functions` /
     `wheel_options`, a supported extension point present in stock Simply Love,
     so no theme file is edited. The picker draws its own overlay and swallows
-    input while up. Which side a pick is written to comes from who is joined
-    first and only then from who pressed, because a lone P2 is a real case and a
-    keyboard press arriving as P1 must not write into the wrong profile. A side
-    with no profile loaded is never offered one.
+    input while up. Each joined player gets their own panel, driven by their own
+    controller, so a pick always goes to whoever pressed the button; a side with
+    no profile loaded shows that and never holds the menu open. Changes are held
+    until Save and exit, and the menu closes once every side is done.
   - Rows are ordered unassigned first, then straps some profile already claims,
     with their owners' display names shown. At a venue with three cabs in one
     room a scan turns up a dozen straps, and without owner names they are an
