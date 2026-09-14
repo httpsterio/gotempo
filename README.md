@@ -129,8 +129,6 @@ Restart gotempo. It writes `hr.txt` beside the module, and the panel appears in 
 
 `gotempo --itgmania-module <path>` sets the same key. See [ITGmania overlay](docs/CONFIGURATION.md#itgmania-overlay) for the file format and where the module lives on each OS.
 
-With that key set, gotempo treats the machine as a cabinet: the OBS and CSV items disappear from the tray, since neither is what this install is for. The rest of the menu is unchanged.
-
 
 ## Reconnection behaviour
 

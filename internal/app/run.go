@@ -257,7 +257,6 @@ func (a *App) runTray() {
 		t := &tray{
 			app:        a,
 			mLog:       systray.AddMenuItem("Start logging", ""),
-			cabinet:    a.snapshotConfig().ITGmaniaModule != "",
 			slotMACs:   make([]string, maxSwitchSlots),
 			slotNames:  make([]string, maxSwitchSlots),
 			slotClicks: make(chan int),

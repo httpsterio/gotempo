@@ -32,12 +32,6 @@ type tray struct {
 	scanDone    chan []KnownDevice
 	lastScanned []KnownDevice
 	scanning    bool
-
-	// cabinet is set when itgmania_module is configured. This install feeds a
-	// game rather than a stream or a workout log, so the OBS and CSV controls
-	// are hidden outright instead of greyed: greying says "not right now", and
-	// these are not part of what this machine does at all.
-	cabinet bool
 }
 
 // deviceEntry is one rendered row in the switch submenu.
@@ -211,14 +205,6 @@ func (t *tray) refresh() {
 	} else {
 		t.mAutoLog.Enable()
 		t.mTwoPlayer.Enable()
-	}
-
-	if t.cabinet {
-		// Hidden every refresh rather than once at build time, since systray
-		// has no "stays hidden" state and a later Show elsewhere would undo it.
-		t.mLog.Hide()
-		t.mAutoLog.Hide()
-		t.mOpenLogs.Hide()
 	}
 
 	t.renderSwitch()

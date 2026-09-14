@@ -81,7 +81,9 @@ release:
 	@test -n "$(VERSION)" || { echo "usage: make release VERSION=v1.2.3"; exit 1; }
 	@echo "$(VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || \
 		{ echo "VERSION must look like v1.2.3 (got '$(VERSION)')"; exit 1; }
-	@git diff --quiet || { echo "working tree is dirty; commit or stash first"; exit 1; }
+	@# status, not diff: git diff alone misses staged and untracked files, so a
+	@# release could be tagged on a commit that is not what is on disk.
+	@test -z "$$(git status --porcelain)" || { echo "working tree is dirty; commit or stash first"; exit 1; }
 	go test ./...
 	@# Refuse before the tag exists rather than after. A tag pushed on a commit
 	@# the branch has not reached leaves GitHub with no workflow on the default

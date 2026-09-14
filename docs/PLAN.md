@@ -278,10 +278,11 @@ WantedBy=default.target
     two-player checkbox and every device row grey out, with one inert banner
     above them saying why. All four could previously be clicked to no effect,
     and the two-player box could sit unchecked while a profile put a strap on
-    P2, because the driven path never consults `currentFor`. When
-    `itgmania_module` is set the OBS and CSV items are hidden rather than
-    greyed: grey says "not right now", and on a cabinet they are not part of
-    what the machine does.
+    P2, because the driven path never consults `currentFor`. The OBS and CSV
+    items were briefly hidden whenever `itgmania_module` was set; that was
+    dropped, since the same toggle drives the OBS file a home streamer with the
+    module needs, and CSV for a configured strap was still written with its
+    control gone. Greying while a profile drives covers the cabinet case.
 
 - **Straps follow the ITGmania profile.** A player names their own strap in
   their game profile and gotempo follows it for as long as they are playing,
