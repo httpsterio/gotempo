@@ -246,9 +246,20 @@ func (a *App) runHeadless(opts cliOptions) int {
 	return 0
 }
 
+// trayWait bounds how long startup waits for the desktop's tray. Seconds in
+// practice; the cap only matters on a desktop with no tray at all.
+const trayWait = 30 * time.Second
+
 // runTray runs the system tray UI and the BLE worker. It blocks until the user
 // quits.
 func (a *App) runTray() {
+	// Give a desktop that is still starting up time to bring its tray up, so
+	// the tray library registers once and succeeds rather than logging a
+	// failure it then recovers from. See waitForTray.
+	if !waitForTray(trayWait) {
+		logErrf("[tray] no system tray after %s; the icon will appear if one starts later. "+
+			"On GNOME this needs the AppIndicator and KStatusNotifierItem Support extension", trayWait)
+	}
 	systray.Run(func() {
 		systray.SetIcon(imgDisconnected)
 		systray.SetTitle("gotempo") // stable SNI Id so the panel remembers the item

@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
+	"github.com/godbus/dbus/v5"
 	"tinygo.org/x/bluetooth"
 )
 
@@ -107,6 +109,48 @@ func disableAutostart() error {
 		return err
 	}
 	return nil
+}
+
+// trayWatcher is the D-Bus name a StatusNotifierItem tray answers on. GNOME's
+// AppIndicator extension, KDE and most modern panels all provide it.
+const trayWatcher = "org.kde.StatusNotifierWatcher"
+
+// waitForTray holds the tray's start until a tray is on the session bus, and
+// reports whether one turned up within timeout.
+//
+// At login, autostart apps launch a second or two before the desktop's tray
+// exists. The tray library then registers into nothing and logs "systray error:
+// failed to register: The name is not activatable" -- on every boot, while
+// working perfectly, because it registers again once the tray appears. People
+// chase that line. Waiting first means the one registration that happens
+// succeeds, and it also closes a small gap in the library, which starts
+// listening for the tray only after its first attempt fails: a tray appearing in
+// between would be missed and the icon would never show.
+//
+// Polling rather than subscribing, since a signal subscription would have the
+// same gap. It is only ever a few seconds.
+func waitForTray(timeout time.Duration) bool {
+	conn, err := dbus.ConnectSessionBus()
+	if err != nil {
+		return false // no session bus; let the tray library report it
+	}
+	defer conn.Close()
+
+	start := time.Now()
+	for {
+		var present bool
+		call := conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, trayWatcher)
+		if call.Err == nil && call.Store(&present) == nil && present {
+			if waited := time.Since(start); waited > time.Second {
+				logInfof("[tray] system tray ready after %s", waited.Round(100*time.Millisecond))
+			}
+			return true
+		}
+		if time.Since(start) >= timeout {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // openAdapter resolves a freshly enabled Bluetooth adapter. On Linux/BlueZ the

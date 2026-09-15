@@ -5,10 +5,15 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/windows/registry"
 	"tinygo.org/x/bluetooth"
 )
+
+// waitForTray has nothing to wait for on Windows: the notification area exists
+// before anything autostarts.
+func waitForTray(time.Duration) bool { return true }
 
 // This file holds the Windows implementations of the platform contract. Shared
 // code only ever calls them by name. The contract is: dirs, notify, openFolder,
