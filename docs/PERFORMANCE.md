@@ -149,6 +149,45 @@ module and without it, within half a megabyte at every point. The growth does no
 second half still climbs at about 51 MB/h. That is ITGmania accumulating memory over a long
 song, not this. gotempo, `bluetoothd` and the reading writer were flat throughout.
 
+### Where the module's 1% goes
+
+The module's actors live in the system layer for the life of the process. Hiding them stops them
+being drawn, not updated, so every one is walked each frame whether or not it is on screen. The
+strap picker is about 200 of the module's 250 actors: two panels of eight rows, eleven actors
+per row.
+
+Measured by building the module with the picker left out, against the full module, five runs
+each, with readings arriving in both.
+
+| Setup | fps | Game CPU |
+|---|---|---|
+| baseline | 203.9 | 364.3 ms/s |
+| module without the picker | 202.2 | 367.0 ms/s |
+| full module | 201.4 | 369.3 ms/s |
+
+The picker accounts for 0.8 fps and 2.4 ms/s, about half the module's cost and roughly 60 ns per
+actor per frame. The other half is the gameplay panels, the song wheel hearts, the evaluation
+graph and the per-second loops, all of which are doing work that is wanted.
+
+The saving scales with frame rate, so it is smallest where it would matter: at 60 fps those same
+actors cost about 0.7 ms per second.
+
+### Hibernating the picker
+
+The module now hibernates the picker's frame a second after the song wheel closes, and wakes it
+when the wheel returns. Hibernation stops the engine updating that subtree at all, while commands
+and messages still arrive, which is what wakes it. Measured again, five runs each:
+
+| Setup | fps | Game CPU |
+|---|---|---|
+| baseline | 204.1 | 363.7 ms/s |
+| module, picker hibernating | 202.7 | 365.9 ms/s |
+| module built without the picker | 202.8 | 366.1 ms/s |
+
+A hibernating picker costs what no picker costs: the two are indistinguishable, fps at p=1.000.
+The module's total cost went from 2.5 fps and 5.0 ms/s to 1.4 fps and 2.3 ms/s. What remains is
+the gameplay panels, the hearts, the graph and the per-second loops.
+
 ## Caveats
 
 - One machine, one song, one theme. Numbers are not portable; the method is.
