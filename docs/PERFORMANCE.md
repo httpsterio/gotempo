@@ -1,208 +1,221 @@
 # Performance
 
-What gotempo and the ITGmania module cost the game, measured rather than estimated.
+Measured cost of gotempo and gotempo-sl-module (the module) to ITGmania. Results are from one
+Linux machine: ITGmania 1.3.0, Simply Love, i7-7700HQ with Intel HD 630, XFCE.
 
-A 2.0.0 report described stuttering during gameplay, blamed on the module looking for a
-`gotempo.ini` that did not exist. 2.1.0 caches that lookup. These measurements check both the
-cost of the current version and whether the old behaviour can be reproduced.
+## Summary
+
+Current versions: gotempo 2.1.0, module 2.1.1. Single player, VerTex Hard, frame rate uncapped,
+five runs per setup. The module runs with simulated readings, so its panel is drawn and its graph
+records.
+
+| | Without the module | With the module | Change |
+|---|---|---|---|
+| Frames per second | 204.11 | 202.70 | -1.41 (-0.69%) |
+| Typical frame (p50) | 4.916 ms | 4.946 ms | +0.030 (+0.61%) |
+| Slowest 1 in 1000 frames (p99.9) | 6.141 ms | 6.158 ms | +0.017 (+0.28%) |
+| Game CPU | 363.7 ms/s | 365.9 ms/s | +2.27 (+0.63%) |
+
+- No stutter was measured. No setup changed p99.9 frame time significantly.
+- On a song the machine cannot hold at 60 fps, no difference was measurable.
+- gotempo uses 0.51 ms of CPU per second with no strap and 4.72 with two connected. It stays
+  between 14.2 and 14.7 MB and never runs on the game's frame thread.
+- The module added no memory growth over an hour.
+- Module 2.0.0 and 2.1.0 measured the same. The stutter reported against 2.0.0 did not reproduce
+  on Linux.
 
 ## Method
 
-Each run launches ITGmania, plays one song on autoplay with no input, and quits. Nothing is
-pressed, so every run does the same work. Per run:
+Each run launches ITGmania, plays one song to the end on autoplay with no input, and quits.
 
-- Every frame's time is logged outside the game, with the overlay hidden.
-- CPU, wakeups, memory and disk activity of the game, gotempo, `bluetoothd` and D-Bus are
-  sampled once a second from `/proc`.
-- Only the gameplay part of the song counts, with 2 seconds trimmed off each end.
-- Thermal throttling is recorded; a throttled run is discarded.
+- MangoHud logs every frame's time from outside the game, with its overlay hidden.
+- A sampler reads CPU, wakeups, memory and disk activity for the game, gotempo, `bluetoothd` and
+  D-Bus from `/proc` once a second.
+- Only gameplay counts. Two seconds are trimmed off each end of the song.
+- Runs with thermal throttling are discarded. None were throttled.
 
-Setups are run round-robin, five runs each, so drift spreads across all of them instead of
-landing on whichever ran last. The spread between identical baseline runs is the noise floor.
-A difference counts only if it beats that spread and a permutation test over the runs.
+Setups run round-robin so drift spreads across all of them. Figures are medians across runs. A
+difference is reported as real when a permutation test over the runs gives p < 0.05 and it is
+larger than the spread between runs of the same setup.
 
-| Setup | Module | gotempo | Readings |
-|---|---|---|---|
-| baseline | not installed | not running | none |
-| module | 2.1.0 | not running | none |
-| gotempo | 2.1.0 | running | none |
-| fakestrap | 2.1.0 | not running | written once a second, so the panel draws and the graph collects |
-| oldfake | 2.0.0 | not running | same as fakestrap |
+Simulated readings: several setups write `hr.txt` once a second in gotempo's own format instead
+of running gotempo. The module then draws its panel and records the graph without a strap. The
+module treats these the same as a strap, checked below.
 
-The module hides its panel and collects no samples unless readings are arriving, so a setup
-with no readings only exercises its idle path. `fakestrap` writes `hr.txt` in gotempo's own
-format, which the module cannot tell apart from a strap. `oldfake` is the same with 2.0.0 and a
-profile that has no `gotempo.ini`, which is the reported stutter case.
+The gotempo menu is the strap and appearance menu opened from ITGmania's sort menu.
+
+## Runs
+
+95 runs. Setup testing before these is not counted, nor one batch cancelled before its first
+song.
+
+| Song | Frame rate | Setup | Players | Module | gotempo | Readings | Runs |
+|---|---|---|---|---|---|---|---|
+| VerTex, Hard | uncapped | baseline | 1 | none | off | none | 10 |
+| VerTex, Hard | uncapped | module | 1 | 2.1.0 | off | none | 5 |
+| VerTex, Hard | uncapped | gotempo | 1 | 2.1.0 | on | none | 5 |
+| VerTex, Hard | uncapped | fakestrap | 1 | 2.1.0 | off | simulated | 10 |
+| VerTex, Hard | uncapped | fakestrap | 1 | 2.1.1 | off | simulated | 5 |
+| VerTex, Hard | uncapped | nopicker | 1 | 2.1.0 without the gotempo menu | off | simulated | 10 |
+| VerTex, Hard | uncapped | oldfake | 1 | 2.0.0 | off | simulated | 5 |
+| VerTex, Hard | uncapped | strap | 1 | 2.1.0 | on | H10 | 5 |
+| VerTex, Hard | uncapped | baseline2p | 2 | none | off | none | 5 |
+| VerTex, Hard | uncapped | fakestrap2 | 2 | 2.1.0 | off | simulated, both players | 5 |
+| VerTex, Hard | uncapped | twostraps | 2 | 2.1.0 | on | H10 and a Polar watch | 5 |
+| VerTex, Hard | uncapped | twoplayers | 2 | 2.1.0 | on | one H10 for both players | 3 |
+| Igaku, Challenge | capped 60 | baseline | 1 | none | off | none | 5 |
+| Igaku, Challenge | capped 60 | fakestrap | 1 | 2.1.0 | off | simulated | 5 |
+| Igaku, Challenge | capped 60 | fakestrap10 | 1 | 2.1.0 | off | simulated, 10 per second | 5 |
+| Igaku, Challenge | capped 60 | oldfake | 1 | 2.0.0 | off | simulated | 5 |
+| Eurobeat Is Fantastic, 60 minutes | uncapped | baseline | 1 | none | off | none | 1 |
+| Eurobeat Is Fantastic, 60 minutes | uncapped | fakestrap | 1 | 2.1.0 | off | simulated | 1 |
+
+The `oldfake` setups load a profile with no `gotempo.ini`, the case the 2.0.0 report described.
+`twoplayers` used real profiles instead of the empty bench profiles, so it is left out of the
+frame time comparisons. Its gotempo figures are in the Bluetooth table.
 
 ## Results
 
-ITGmania 1.3.0, Simply Love, Linux, i7-7700HQ with Intel HD 630, XFCE, frame rate uncapped.
-Song: In The Groove / VerTex, Hard. Five runs per setup, medians.
+Each table compares against its first row, measured in the same session.
 
-| Setup | fps | Typical frame (p50) | Worst 1 in 1000 (p99.9) | Game CPU |
-|---|---|---|---|---|
-| baseline | 203.9 | 4.92 ms | 6.23 ms | 364 ms/s |
-| module | 202.3 | 4.96 ms | 6.23 ms | 370 ms/s |
-| gotempo | 202.5 | 4.95 ms | 6.20 ms | 370 ms/s |
-| fakestrap | 201.8 | 4.97 ms | 6.12 ms | 368 ms/s |
-| oldfake | 201.4 | 4.97 ms | 6.19 ms | 369 ms/s |
+### Single player, uncapped
 
-**The module costs about 1% of frame time.** Loading it costs 1.5 to 2.6 fps out of 204, 0.04 ms
-on a typical frame, and 3 to 5 ms of CPU per second, which is 0.4% of one core. The three
-measurements agree: 0.04 ms per frame at 200 fps is 8 ms per second.
+VerTex Hard, module 2.1.0 before the gotempo menu was changed.
 
-**No stutter.** The tail never moves. p99 and p99.9 are the same as baseline in every setup, in
-125 seconds of gameplay per run.
+| Setup | fps | Change | p50 ms | Change | p99.9 ms | Change | Game CPU ms/s | Change |
+|---|---|---|---|---|---|---|---|---|
+| baseline | 203.94 | reference | 4.919 | reference | 6.229 | reference | 364.3 | reference |
+| module | 202.28 | -1.66 (-0.81%) | 4.956 | +0.037 (+0.76%) | 6.229 | -0.001 (-0.01%) | 369.7 | +5.40 (+1.48%) |
+| gotempo | 202.47 | -1.46 (-0.72%) | 4.952 | +0.033 (+0.67%) | 6.196 | -0.033 (-0.53%) | 369.7 | +5.34 (+1.47%) |
+| fakestrap | 201.75 | -2.18 (-1.07%) | 4.965 | +0.046 (+0.94%) | 6.122 | -0.107 (-1.72%) | 367.6 | +3.32 (+0.91%) |
+| oldfake | 201.38 | -2.55 (-1.25%) | 4.970 | +0.051 (+1.04%) | 6.193 | -0.036 (-0.57%) | 368.6 | +4.28 (+1.17%) |
 
-**Drawing the panel is free within measurement.** `fakestrap` draws the panel every frame and
-collects graph samples; `module` does neither. No difference in frame times or frame rate.
+Loading the module costs 1.46 to 2.55 fps and 3.32 to 5.40 ms of game CPU per second (p = 0.048).
+p99.9 is unchanged in every setup. Drawing the panel and recording the graph (`fakestrap`) cost
+no more than loading the module (`module`). Running gotempo alongside (`gotempo`) made no
+difference inside the game.
 
-**gotempo itself is negligible.** 0.51 ms of CPU per second with no strap, 15 MB resident.
-`bluetoothd` and both D-Bus buses add 0.54 ms/s between them. With a strap configured but
-switched off, gotempo retries the connection and uses 1.35 ms/s.
+`oldfake` against `fakestrap` compares module 2.0.0 with 2.1.0 under identical conditions. No
+metric differs.
 
-**The 2.0.0 stutter did not reproduce on Linux.** `oldfake` and `fakestrap` differ in nothing,
-tail included, with the same missing `gotempo.ini` and the same live panel. The per-second ini
-lookups cost nothing measurable here. That does not disprove the report: the cost of opening a
-missing file is a property of the filesystem and of anything scanning it, so a Windows run is
-still worth doing. It does mean the lookups alone are not enough to explain it.
+### Capped at 60 fps
 
-### A song the machine cannot keep up with
+Notice Me Benpai 3 / Igaku, Challenge. The song ships 158 kB of its own Lua, and the machine holds
+56.16 fps without the module. `fakestrap10` writes readings ten times a second.
 
-Same method, song Notice Me Benpai 3 / Igaku, Challenge, frame rate capped at 60. This chart
-ships 158 kB of its own Lua and the machine holds only 56 fps at baseline, so the game is
-already missing frames before anything is added. `fakestrap10` writes `hr.txt` ten times a
-second instead of once, as a headroom check on the file traffic.
+| Setup | fps | Change | p50 ms | Change | p99.9 ms | Change | Game CPU ms/s | Change |
+|---|---|---|---|---|---|---|---|---|
+| baseline | 56.16 | reference | 20.858 | reference | 34.764 | reference | 661.0 | reference |
+| fakestrap | 55.38 | -0.78 (-1.39%) | 20.926 | +0.069 (+0.33%) | 34.844 | +0.080 (+0.23%) | 662.1 | +1.02 (+0.15%) |
+| fakestrap10 | 55.38 | -0.78 (-1.39%) | 20.912 | +0.054 (+0.26%) | 34.666 | -0.097 (-0.28%) | 662.8 | +1.78 (+0.27%) |
+| oldfake | 55.32 | -0.84 (-1.50%) | 20.881 | +0.024 (+0.11%) | 34.632 | -0.132 (-0.38%) | 661.7 | +0.62 (+0.09%) |
 
-| Setup | fps | Typical frame (p50) | Worst 1 in 1000 (p99.9) | Game CPU |
-|---|---|---|---|---|
-| baseline | 56.2 | 20.86 ms | 34.76 ms | 661 ms/s |
-| fakestrap | 55.4 | 20.93 ms | 34.84 ms | 662 ms/s |
-| fakestrap10 | 55.4 | 20.91 ms | 34.67 ms | 663 ms/s |
-| oldfake | 55.3 | 20.88 ms | 34.63 ms | 662 ms/s |
-
-Nothing here is significant: every setup sits 0.8 fps under baseline, at p=0.119, against a
-baseline whose own p99.9 varies by 0.9 ms between runs. The tail does not move, so the module
-does not make a struggling song worse. Ten writes a second are the same as one.
-
-The cost is paid per frame, not per second. The module adds about 5 ms/s of CPU at 200 fps and
-about 1 ms/s at 55 fps: the same work per frame, fewer frames. A slower machine pays less in
-absolute terms, and roughly the same fraction of each frame.
+No difference reaches significance. `fakestrap` adds 1.02 ms of CPU per second here and 3.32 on
+VerTex at 204 fps. The module's cost is paid per frame, and this song runs fewer frames.
 
 ### Two players
 
-Same song and method, both sides joined, five runs each. `baseline2p` has no module;
-`fakestrap2` draws a panel for each side off written readings; `twostraps` is the real thing,
-gotempo connected to a strap per side.
+VerTex Hard, both players joined, empty bench profiles. `twostraps` was measured earlier the same
+day.
 
-| Setup | fps | Typical frame (p50) | Worst 1 in 1000 (p99.9) | Game CPU |
-|---|---|---|---|---|
-| baseline2p | 186.5 | 5.36 ms | 8.46 ms | 450 ms/s |
-| fakestrap2 | 184.4 | 5.42 ms | 8.75 ms | 455 ms/s |
-| twostraps | 184.4 | 5.41 ms | 8.75 ms | 453 ms/s |
+| Setup | fps | Change | p50 ms | Change | p99.9 ms | Change | Game CPU ms/s | Change |
+|---|---|---|---|---|---|---|---|---|
+| baseline2p | 186.51 | reference | 5.355 | reference | 8.456 | reference | 449.5 | reference |
+| fakestrap2 | 184.40 | -2.11 (-1.13%) | 5.418 | +0.062 (+1.17%) | 8.748 | +0.291 (+3.45%) | 455.0 | +5.54 (+1.23%) |
+| twostraps | 184.41 | -2.11 (-1.13%) | 5.412 | +0.056 (+1.06%) | 8.754 | +0.297 (+3.52%) | 453.4 | +3.91 (+0.87%) |
 
-The module costs the same with two panels as with one: 2.1 fps and 5.5 ms/s here against 1.7 fps
-and 5.4 ms/s in single player. It builds actors for both sides whichever is joined, so the tree
-it updates every frame is the same size either way.
+The module costs 2.11 fps and 5.54 ms/s with two panels (p = 0.048), close to its single player
+cost. Real straps (`twostraps`) and simulated readings (`fakestrap2`) measure the same. Joining a
+second player costs the game itself 17.42 fps and 85.2 ms/s.
 
-Real straps add nothing the game can feel. `twostraps` and `fakestrap2` are the same on every
-metric, and written readings are indistinguishable from a strap in single player too.
+### Simulated readings against a real strap
 
-Two-player mode itself costs the game 17 fps and 85 ms/s, a second playfield to draw. That is
-the game, not this.
+VerTex Hard, single player. `strap` ran with gotempo connected to an H10, earlier the same day.
+
+| Setup | fps | Change | p50 ms | Change | p99.9 ms | Change | Game CPU ms/s | Change |
+|---|---|---|---|---|---|---|---|---|
+| fakestrap | 201.75 | reference | 4.965 | reference | 6.122 | reference | 367.6 | reference |
+| strap | 201.27 | -0.48 (-0.24%) | 4.973 | +0.008 (+0.17%) | 6.211 | +0.089 (+1.46%) | 369.4 | +1.74 (+0.47%) |
+
+No metric differs.
 
 ### gotempo and Bluetooth
 
-Measured outside the game's frame loop, five runs per condition.
+CPU, wakeups and memory of the processes outside the game, during the same runs.
 
-| Condition | gotempo CPU | Wakeups | Memory | `bluetoothd` | D-Bus |
-|---|---|---|---|---|---|
-| no strap | 0.51 ms/s | 9/s | 14.2 MB | 0.16 ms/s | 0.17 ms/s |
-| one strap connected | 4.01 ms/s | 70/s | 14.4 MB | 0.92 ms/s | 0.93 ms/s |
-| two straps connected | 4.72 ms/s | 78/s | 14.7 MB | 0.93 ms/s | 0.96 ms/s |
-| one strap feeding both slots | 4.41 ms/s | 78/s | 14.5 MB | 0.93 ms/s | 0.96 ms/s |
+| Condition | gotempo CPU ms/s | Change | Wakeups/s | Memory MB | `bluetoothd` ms/s | System D-Bus ms/s |
+|---|---|---|---|---|---|---|
+| no strap | 0.51 | reference | 9.0 | 14.2 | 0.16 | 0.17 |
+| one strap | 4.01 | +3.50 | 69.7 | 14.4 | 0.92 | 0.93 |
+| two straps | 4.72 | +4.21 | 78.0 | 14.7 | 0.93 | 0.96 |
+| one strap feeding both players | 4.41 | +3.90 | 77.9 | 14.6 | 0.93 | 0.96 |
 
-The first connection costs, the second barely: one strap adds 3.5 ms/s over idle, a second adds
-0.7 more. Most of it is per-reading work rather than the radio link, which the shared-strap row
-shows: one connection publishing to two slots costs nearly as much as two connections.
-`bluetoothd` and D-Bus do not care how many straps there are. gotempo at its busiest is 0.5% of
-one core.
+The first strap adds 3.50 ms/s. The second adds 0.71 more. One strap feeding both players costs
+4.41 ms/s, close to two straps, so most of the cost comes from handling readings. `bluetoothd`
+and the system D-Bus use the same CPU with one strap or two.
 
-### An hour in one song
+### One hour
 
-A 60-minute marathon chart, baseline against a live panel, one run each. Long enough for memory
-growth to show and for rare hitches to have somewhere to happen.
+Eurobeat Is Fantastic, a 60 minute chart, one run each.
 
-| | baseline | with the module |
+| Setup | fps | Change | p50 ms | Change | p99.9 ms | Change | Game CPU ms/s | Change |
+|---|---|---|---|---|---|---|---|---|
+| baseline | 207.93 | reference | 4.822 | reference | 6.099 | reference | 349.3 | reference |
+| fakestrap | 204.76 | -3.17 (-1.52%) | 4.904 | +0.082 (+1.71%) | 6.152 | +0.053 (+0.87%) | 355.9 | +6.63 (+1.90%) |
+
+| | baseline | fakestrap |
 |---|---|---|
-| Typical frame (p50) | 4.82 ms | 4.90 ms |
-| Worst 1 in 1000 (p99.9) | 6.10 ms | 6.15 ms |
-| Worst frame in 58 minutes | 28.79 ms | 26.07 ms |
+| Slowest frame | 28.789 ms | 26.074 ms |
 | Package power | 16.58 W | 16.61 W |
-| Game memory, start to end | 399 to 465 MB | 400 to 465 MB |
+| Game memory after 2 minutes | 399.4 MB | 399.9 MB |
+| Game memory at the end | 464.8 MB | 464.6 MB |
+| Game memory growth, fitted | 59.5 MB/h | 58.9 MB/h |
+| Growth, first half | 79.3 MB/h | 78.9 MB/h |
+| Growth, second half | 51.3 MB/h | 50.6 MB/h |
 
-Frame times hold up: the same typical frame, the same tail, and the worst single frame of the
-hour was larger without the module than with it. Power is identical.
+The game's memory grows at the same rate with and without the module. `bluetoothd` and the reading
+writer stayed flat. gotempo was not running in these runs.
 
-The game grows about 59 MB per hour during one song, and it grows at the same rate with the
-module and without it, within half a megabyte at every point. The growth does not flatten: the
-second half still climbs at about 51 MB/h. That is ITGmania accumulating memory over a long
-song, not this. gotempo, `bluetoothd` and the reading writer were flat throughout.
+### Actor cost
 
-### Where the module's 1% goes
+The module's actors stay in ITGmania's system layer for the whole session. A hidden actor is still
+updated every frame. The gotempo menu is 211 actors: two panels of 104 (16 for the frame, header,
+status and footer, and 8 rows of 11) and 3 for its clock and input guard.
 
-The module's actors live in the system layer for the life of the process. Hiding them stops them
-being drawn, not updated, so every one is walked each frame whether or not it is on screen. The
-strap picker is about 200 of the module's 250 actors: two panels of eight rows, eleven actors
-per row.
+Module 2.1.0 against a build with the gotempo menu removed, same session:
 
-Measured by building the module with the picker left out, against the full module, five runs
-each, with readings arriving in both.
+| Setup | fps | Change | p50 ms | Change | p99.9 ms | Change | Game CPU ms/s | Change |
+|---|---|---|---|---|---|---|---|---|
+| fakestrap | 201.30 | reference | 4.976 | reference | 6.210 | reference | 369.8 | reference |
+| nopicker | 202.16 | +0.85 (+0.42%) | 4.958 | -0.018 (-0.36%) | 6.096 | -0.113 (-1.82%) | 367.0 | -2.87 (-0.78%) |
 
-| Setup | fps | Game CPU |
-|---|---|---|
-| baseline | 203.9 | 364.3 ms/s |
-| module without the picker | 202.2 | 367.0 ms/s |
-| full module | 201.4 | 369.3 ms/s |
+The gotempo menu cost 0.85 fps and 2.87 ms/s, 68 ns per actor per frame.
 
-The picker accounts for 0.8 fps and 2.4 ms/s, about half the module's cost and roughly 60 ns per
-actor per frame. The other half is the gameplay panels, the song wheel hearts, the evaluation
-graph and the per-second loops, all of which are doing work that is wanted.
+Module 2.1.1 hibernates the gotempo menu one second after the song wheel closes and wakes it when
+the wheel returns. Hibernated actors are not updated. Measured with its own baseline:
 
-The saving scales with frame rate, so it is smallest where it would matter: at 60 fps those same
-actors cost about 0.7 ms per second.
+| Setup | fps | Change | p50 ms | Change | p99.9 ms | Change | Game CPU ms/s | Change |
+|---|---|---|---|---|---|---|---|---|
+| baseline | 204.11 | reference | 4.916 | reference | 6.141 | reference | 363.7 | reference |
+| fakestrap | 202.70 | -1.41 (-0.69%) | 4.946 | +0.030 (+0.61%) | 6.158 | +0.017 (+0.28%) | 365.9 | +2.27 (+0.63%) |
+| nopicker | 202.77 | -1.34 (-0.66%) | 4.943 | +0.027 (+0.55%) | 6.236 | +0.096 (+1.56%) | 366.1 | +2.47 (+0.68%) |
 
-### Hibernating the picker
-
-The module now hibernates the picker's frame a second after the song wheel closes, and wakes it
-when the wheel returns. Hibernation stops the engine updating that subtree at all, while commands
-and messages still arrive, which is what wakes it. Measured again, five runs each:
-
-| Setup | fps | Game CPU |
-|---|---|---|
-| baseline | 204.1 | 363.7 ms/s |
-| module, picker hibernating | 202.7 | 365.9 ms/s |
-| module built without the picker | 202.8 | 366.1 ms/s |
-
-A hibernating picker costs what no picker costs: the two are indistinguishable, fps at p=1.000.
-The module's total cost went from 2.5 fps and 5.0 ms/s to 1.4 fps and 2.3 ms/s. What remains is
-the gameplay panels, the hearts, the graph and the per-second loops.
+2.1.1 and the build without the gotempo menu measure the same (fps p = 1.0). This session's
+baseline is 0.18 fps above the first session's. Baseline runs spread by 0.94 fps in the first
+session and 1.16 fps in this one.
 
 ## Caveats
 
-- One machine, one song, one theme. Numbers are not portable; the method is.
-- With five runs per setup the smallest reachable p-value is 0.008, so p=0.048 is modest
-  evidence. The effect is believed because four independent setups agree, not because of any
-  single test.
-- Frame rate uncapped. With vsync on and frames to spare, none of this is visible at all.
-- Most runs used written readings rather than a strap. That was checked against real straps and
-  makes no difference in game.
+- With vsync on and frames to spare, none of these differences are visible.
+- One machine, one theme, three songs. The size of each figure will differ on other hardware.
+- Five runs per setup allow p = 0.008 at best, so p = 0.048 is moderate evidence. Findings are
+  reported where several setups agree.
 
 ## Reproducing
 
-The harness lives outside this repository, in `~/gotempo-bench`: `setup.sh` puts the machine in
-a setup, `run-once.sh` plays one song and collects everything, `batch.sh` runs setups
-round-robin, and `compare.py` prints the tables above.
+The harness is in `~/gotempo-bench`, outside this repository. `setup.sh` switches setups,
+`run-once.sh` plays one song and collects the data, `batch.sh` runs setups round-robin, and
+`compare.py` prints the comparisons.
 
 ```
 sudo -v
@@ -210,6 +223,4 @@ sudo -v
 python3 compare.py --uncapped
 ```
 
-## Still open
-
-- Windows, where the original report came from.
+Windows has not been measured.
