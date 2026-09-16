@@ -128,6 +128,27 @@ shows: one connection publishing to two slots costs nearly as much as two connec
 `bluetoothd` and D-Bus do not care how many straps there are. gotempo at its busiest is 0.5% of
 one core.
 
+### An hour in one song
+
+A 60-minute marathon chart, baseline against a live panel, one run each. Long enough for memory
+growth to show and for rare hitches to have somewhere to happen.
+
+| | baseline | with the module |
+|---|---|---|
+| Typical frame (p50) | 4.82 ms | 4.90 ms |
+| Worst 1 in 1000 (p99.9) | 6.10 ms | 6.15 ms |
+| Worst frame in 58 minutes | 28.79 ms | 26.07 ms |
+| Package power | 16.58 W | 16.61 W |
+| Game memory, start to end | 399 to 465 MB | 400 to 465 MB |
+
+Frame times hold up: the same typical frame, the same tail, and the worst single frame of the
+hour was larger without the module than with it. Power is identical.
+
+The game grows about 59 MB per hour during one song, and it grows at the same rate with the
+module and without it, within half a megabyte at every point. The growth does not flatten: the
+second half still climbs at about 51 MB/h. That is ITGmania accumulating memory over a long
+song, not this. gotempo, `bluetoothd` and the reading writer were flat throughout.
+
 ## Caveats
 
 - One machine, one song, one theme. Numbers are not portable; the method is.
@@ -152,5 +173,4 @@ python3 compare.py --uncapped
 
 ## Still open
 
-- Memory over an hour, for the game, gotempo and `bluetoothd`.
 - Windows, where the original report came from.
